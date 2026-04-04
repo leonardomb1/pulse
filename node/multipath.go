@@ -142,7 +142,7 @@ func (m *MultipathSession) Transport() string {
 // countedConn wraps a net.Conn and calls onClose when Close() is called.
 type countedConn struct {
 	net.Conn
-	onClose  func()
+	onClose   func()
 	closeOnce sync.Once
 }
 

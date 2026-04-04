@@ -1,8 +1,8 @@
 package tests
 
 import (
-	"path/filepath"
 	"github.com/leonardomb1/pulse/node"
+	"path/filepath"
 	"testing"
 	"time"
 )

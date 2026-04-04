@@ -40,7 +40,7 @@ var pktPool = sync.Pool{
 	},
 }
 
-func getPktBuf() *[]byte { return pktPool.Get().(*[]byte) }
+func getPktBuf() *[]byte  { return pktPool.Get().(*[]byte) }
 func putPktBuf(b *[]byte) { pktPool.Put(b) }
 
 // tunFrameWrite writes a length-prefixed IP packet to w in a single write.

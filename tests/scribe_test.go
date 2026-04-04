@@ -3,11 +3,11 @@ package tests
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"github.com/leonardomb1/pulse/cli"
 	"github.com/leonardomb1/pulse/config"
 	"github.com/leonardomb1/pulse/node"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -54,11 +54,11 @@ func TestScribePersistence(t *testing.T) {
 	}
 
 	var state struct {
-		RevokedIDs []string                   `json:"revoked_ids"`
-		DNSZones   []node.DNSZone             `json:"dns_zones"`
-		GlobalACLs []node.NodeACL             `json:"global_acls"`
-		NodeMeta   map[string]node.NodeMeta   `json:"node_meta"`
-		Tokens     []node.JoinToken           `json:"tokens"`
+		RevokedIDs []string                 `json:"revoked_ids"`
+		DNSZones   []node.DNSZone           `json:"dns_zones"`
+		GlobalACLs []node.NodeACL           `json:"global_acls"`
+		NodeMeta   map[string]node.NodeMeta `json:"node_meta"`
+		Tokens     []node.JoinToken         `json:"tokens"`
 	}
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatalf("unmarshal: %v", err)

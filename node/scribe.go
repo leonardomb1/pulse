@@ -490,14 +490,14 @@ func (s *Scribe) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 
 	resp := struct {
-		Peers      []PeerEntry            `json:"peers"`
-		Stats      map[string]NodeStats   `json:"stats"`
-		RevokedIDs []string               `json:"revoked_ids"`
-		NodeMeta   map[string]NodeMeta    `json:"node_meta"`
-		ACLRules   []ACLRule              `json:"acl_rules"`
-		ScribeID   string                 `json:"scribe_id"`
-		NetworkID  string                 `json:"network_id"`
-		MeshCIDR   string                 `json:"mesh_cidr"`
+		Peers      []PeerEntry          `json:"peers"`
+		Stats      map[string]NodeStats `json:"stats"`
+		RevokedIDs []string             `json:"revoked_ids"`
+		NodeMeta   map[string]NodeMeta  `json:"node_meta"`
+		ACLRules   []ACLRule            `json:"acl_rules"`
+		ScribeID   string               `json:"scribe_id"`
+		NetworkID  string               `json:"network_id"`
+		MeshCIDR   string               `json:"mesh_cidr"`
 	}{
 		Peers:      peers,
 		Stats:      stats,

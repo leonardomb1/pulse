@@ -25,12 +25,12 @@ type NodeMeta struct {
 // NetworkConfig is the authoritative network-wide configuration distributed by
 // the scribe node. Nodes merge by keeping the entry with the highest Version.
 type NetworkConfig struct {
-	Version    int64                `json:"version"`               // monotonically increasing (unix milliseconds)
+	Version    int64               `json:"version"`               // monotonically increasing (unix milliseconds)
 	RevokedIDs []string            `json:"revoked_ids"`           // node IDs whose certificates have been revoked
 	DNSZones   []DNSZone           `json:"dns_zones"`             // additional DNS records served by all nodes
 	GlobalACLs []NodeACL           `json:"global_acls"`           // network-wide ACL additions
 	NodeMeta   map[string]NodeMeta `json:"node_meta,omitempty"`   // operator-assigned node names and tags
-	JoinTokens []JoinToken        `json:"join_tokens,omitempty"` // scribe-managed join tokens
+	JoinTokens []JoinToken         `json:"join_tokens,omitempty"` // scribe-managed join tokens
 }
 
 // SignedNetConfig wraps a NetworkConfig with an ed25519 signature from the scribe.

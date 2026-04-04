@@ -26,14 +26,14 @@ import (
 )
 
 const (
-	socks5Ver       = 0x05
-	socks5NoAuth    = 0x00
-	socks5CmdConn   = 0x01
-	socks5AtypIPv4  = 0x01
-	socks5AtypFQDN  = 0x03
-	socks5AtypIPv6  = 0x04
-	socks5RespOK    = 0x00
-	socks5RespFail  = 0x01
+	socks5Ver      = 0x05
+	socks5NoAuth   = 0x00
+	socks5CmdConn  = 0x01
+	socks5AtypIPv4 = 0x01
+	socks5AtypFQDN = 0x03
+	socks5AtypIPv6 = 0x04
+	socks5RespOK   = 0x00
+	socks5RespFail = 0x01
 )
 
 // SOCKSServer is a SOCKS5 proxy that routes .pulse domains through the mesh
@@ -275,8 +275,9 @@ func (s *SOCKSServer) resolvePulseAlias(host string, maxDepth int) string {
 }
 
 // parsePulseNodeID extracts the nodeID from a .pulse domain.
-//   "a3f2c1d4.pulse"          → "a3f2c1d4"
-//   "postgres.a3f2c1d4.pulse" → "a3f2c1d4"
+//
+//	"a3f2c1d4.pulse"          → "a3f2c1d4"
+//	"postgres.a3f2c1d4.pulse" → "a3f2c1d4"
 func parsePulseNodeID(host string) string {
 	host = strings.TrimSuffix(host, ".pulse")
 	parts := strings.Split(host, ".")
@@ -284,8 +285,9 @@ func parsePulseNodeID(host string) string {
 }
 
 // parsePulseDest returns the nodeID and the in-mesh destAddr for a .pulse connection.
-//   "a3f2c1d4.pulse":5432       → ("a3f2c1d4", "localhost:5432")
-//   "postgres.a3f2c1d4.pulse":0 → ("a3f2c1d4", "postgres:5432") — service name used as host
+//
+//	"a3f2c1d4.pulse":5432       → ("a3f2c1d4", "localhost:5432")
+//	"postgres.a3f2c1d4.pulse":0 → ("a3f2c1d4", "postgres:5432") — service name used as host
 func parsePulseDest(host string, port uint16, rawDest string) (nodeID, addr string) {
 	h := strings.TrimSuffix(host, ".pulse")
 	parts := strings.Split(h, ".")

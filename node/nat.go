@@ -39,9 +39,9 @@ import (
 )
 
 const (
-	punchInterval   = 30 * time.Second
-	punchTimeout    = 5 * time.Second
-	punchLeadTime   = 500 * time.Millisecond // how far ahead to schedule simultaneous punch
+	punchInterval = 30 * time.Second
+	punchTimeout  = 5 * time.Second
+	punchLeadTime = 500 * time.Millisecond // how far ahead to schedule simultaneous punch
 )
 
 // NATManager discovers the local public address and orchestrates hole punching
@@ -204,7 +204,7 @@ func (m *NATManager) punchPeer(ctx context.Context, entry PeerEntry) {
 	}
 
 	msg, _ := marshalStreamMsg(streamMsg{
-		Type:       "punch",
+		Type:        "punch",
 		PunchNodeID: m.selfID,
 		PunchAddr:   myPublic,
 		PunchToken:  token,

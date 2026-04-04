@@ -94,34 +94,34 @@ func (s *ControlServer) ListenAndServe(ctx context.Context) error {
 }
 
 type ctrlRequest struct {
-	Cmd    string  `json:"cmd"`
+	Cmd string `json:"cmd"`
 	// dns-add
-	Zone   DNSZone `json:"zone,omitempty"`
+	Zone DNSZone `json:"zone,omitempty"`
 	// dns-remove
-	Name   string  `json:"name,omitempty"`
-	Type   string  `json:"type,omitempty"`
+	Name string `json:"name,omitempty"`
+	Type string `json:"type,omitempty"`
 	// route-add
-	CIDR   string  `json:"cidr,omitempty"`
-	Via    string  `json:"via,omitempty"`
+	CIDR string `json:"cidr,omitempty"`
+	Via  string `json:"via,omitempty"`
 	// revoke, tag, name
-	NodeID string  `json:"node_id,omitempty"`
+	NodeID string `json:"node_id,omitempty"`
 	// tag-add, tag-remove
-	Tag    string  `json:"tag,omitempty"`
+	Tag string `json:"tag,omitempty"`
 	// acl-add
 	ACLRule *ACLRule `json:"acl_rule,omitempty"`
 	// acl-remove
-	Index  int      `json:"index,omitempty"`
+	Index int `json:"index,omitempty"`
 	// token-create
-	TTL      string `json:"ttl,omitempty"`
-	MaxUses  int    `json:"max_uses,omitempty"`
+	TTL     string `json:"ttl,omitempty"`
+	MaxUses int    `json:"max_uses,omitempty"`
 	// token-revoke
 	TokenPrefix string `json:"token_prefix,omitempty"`
 }
 
 type ctrlResponse struct {
-	OK     bool        `json:"ok,omitempty"`
-	Error  string      `json:"error,omitempty"`
-	Data   interface{} `json:"data,omitempty"`
+	OK    bool        `json:"ok,omitempty"`
+	Error string      `json:"error,omitempty"`
+	Data  interface{} `json:"data,omitempty"`
 }
 
 func (s *ControlServer) handle(conn net.Conn) {

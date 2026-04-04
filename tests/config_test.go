@@ -1,9 +1,9 @@
 package tests
 
 import (
+	"github.com/leonardomb1/pulse/config"
 	"os"
 	"path/filepath"
-	"github.com/leonardomb1/pulse/config"
 	"testing"
 )
 

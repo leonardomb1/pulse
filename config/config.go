@@ -21,12 +21,12 @@ type Config struct {
 }
 
 type NodeConfig struct {
-	Addr      string `toml:"addr"`         // advertised address (gossipped to peers)
-	Listen    string `toml:"listen"`       // actual bind address (defaults to addr if empty)
+	Addr      string `toml:"addr"`   // advertised address (gossipped to peers)
+	Listen    string `toml:"listen"` // actual bind address (defaults to addr if empty)
 	TCPListen string `toml:"tcp_listen"`
 	DataDir   string `toml:"data_dir"`
-	NetworkID string `toml:"network_id"`   // network isolation ID (peers with different IDs are rejected)
-	LogLevel  string `toml:"log_level"`    // debug, info, warn, error (default: info)
+	NetworkID string `toml:"network_id"` // network isolation ID (peers with different IDs are rejected)
+	LogLevel  string `toml:"log_level"`  // debug, info, warn, error (default: info)
 }
 
 type BootstrapConfig struct {
@@ -82,8 +82,8 @@ type TunConfig struct {
 }
 
 type PersistConfig struct {
-	Enabled  bool `toml:"enabled"`   // persist peer table to disk (default true)
-	Interval int  `toml:"interval"`  // save interval in seconds (default 60)
+	Enabled  bool `toml:"enabled"`  // persist peer table to disk (default true)
+	Interval int  `toml:"interval"` // save interval in seconds (default 60)
 }
 
 func Load(path string) (*Config, error) {

@@ -70,10 +70,10 @@ func FormatPortRanges(ports []PortRange) string {
 
 // ACLRule defines a traffic policy. Rules are evaluated top-to-bottom; first match wins.
 type ACLRule struct {
-	Action     string      `json:"action"`              // "allow" or "deny" (default "allow")
-	SrcPattern string      `json:"src_pat,omitempty"`   // source node pattern (glob, tag:xxx, or name)
-	DstPattern string      `json:"dst_pat"`             // destination node pattern
-	Ports      []PortRange `json:"ports,omitempty"`     // empty = all ports
+	Action     string      `json:"action"`            // "allow" or "deny" (default "allow")
+	SrcPattern string      `json:"src_pat,omitempty"` // source node pattern (glob, tag:xxx, or name)
+	DstPattern string      `json:"dst_pat"`           // destination node pattern
+	Ports      []PortRange `json:"ports,omitempty"`   // empty = all ports
 }
 
 // action returns the effective action, defaulting to "allow" for backward compat.
@@ -143,7 +143,7 @@ func (r ACLRule) matches(srcNodeID, dstNodeID string, port uint16, lookup MetaLo
 // NodeACL is the policy for one node. Rules are evaluated in order; first match wins.
 type NodeACL struct {
 	NodeID  string    `json:"node_id"`
-	Allow   []ACLRule `json:"allow"`   // kept as "allow" in JSON for backward compat, but rules can be deny
+	Allow   []ACLRule `json:"allow"` // kept as "allow" in JSON for backward compat, but rules can be deny
 	Version int64     `json:"version"`
 }
 

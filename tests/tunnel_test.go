@@ -11,7 +11,7 @@ func TestValidateDestAddr(t *testing.T) {
 	// We test the port parsing used in ACL enforcement.
 
 	tests := []struct {
-		addr    string
+		addr     string
 		wantPort uint16
 	}{
 		{"localhost:22", 22},

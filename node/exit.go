@@ -11,10 +11,10 @@ import (
 // CIDRRoute maps a network prefix to an exit relay node.
 // Traffic destined for IPs in CIDR is tunnelled through NodeID.
 type CIDRRoute struct {
-	CIDR     string `json:"cidr"`
-	NodeID   string `json:"node_id"`
-	AutoLearn bool  `json:"auto,omitempty"` // true if learned from gossip, false if manually added
-	net      *net.IPNet
+	CIDR      string `json:"cidr"`
+	NodeID    string `json:"node_id"`
+	AutoLearn bool   `json:"auto,omitempty"` // true if learned from gossip, false if manually added
+	net       *net.IPNet
 }
 
 // ExitRouteTable is the client-side CIDR → exit node mapping.

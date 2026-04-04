@@ -23,9 +23,9 @@ import (
 )
 
 const (
-	probeInterval  = 5 * time.Second  // how often to probe all peers
-	probeTimeout   = 3 * time.Second  // max wait for a pong
-	probeWindowLen = 10               // rolling window for loss calculation
+	probeInterval  = 5 * time.Second // how often to probe all peers
+	probeTimeout   = 3 * time.Second // max wait for a pong
+	probeWindowLen = 10              // rolling window for loss calculation
 )
 
 // LinkStats holds measured quality metrics for a single peer link.
@@ -237,4 +237,3 @@ func (p *Prober) statsFor(nodeID string) *LinkStats {
 	p.stats[nodeID] = s
 	return s
 }
-

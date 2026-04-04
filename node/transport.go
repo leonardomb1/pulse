@@ -57,8 +57,8 @@ func (w *wsConn) Close() error {
 	return w.conn.CloseNow()
 }
 
-func (w *wsConn) LocalAddr() net.Addr              { return wsAddr("ws-local") }
-func (w *wsConn) RemoteAddr() net.Addr             { return wsAddr("ws-remote") }
+func (w *wsConn) LocalAddr() net.Addr                { return wsAddr("ws-local") }
+func (w *wsConn) RemoteAddr() net.Addr               { return wsAddr("ws-remote") }
 func (w *wsConn) SetDeadline(t time.Time) error      { return nil }
 func (w *wsConn) SetReadDeadline(t time.Time) error  { return nil }
 func (w *wsConn) SetWriteDeadline(t time.Time) error { return nil }

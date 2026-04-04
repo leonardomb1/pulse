@@ -230,8 +230,9 @@ func (d *DNSServer) resolveNodeIP(entry PeerEntry) net.IP {
 }
 
 // parseName decomposes a .pulse FQDN into (nodeID, service).
-//   "a3f2c1d4.pulse."          → ("a3f2c1d4", "")
-//   "postgres.a3f2c1d4.pulse." → ("a3f2c1d4", "postgres")
+//
+//	"a3f2c1d4.pulse."          → ("a3f2c1d4", "")
+//	"postgres.a3f2c1d4.pulse." → ("a3f2c1d4", "postgres")
 func (d *DNSServer) parseName(name string) (nodeID, service string) {
 	if !strings.HasSuffix(name, pulseTLD) {
 		return "", ""

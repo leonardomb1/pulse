@@ -30,7 +30,7 @@ func newYamuxSession(s *yamux.Session) Session {
 	return &yamuxSession{s: s}
 }
 
-func (y *yamuxSession) Open() (net.Conn, error)  { return y.s.Open() }
+func (y *yamuxSession) Open() (net.Conn, error)   { return y.s.Open() }
 func (y *yamuxSession) Accept() (net.Conn, error) { return y.s.Accept() }
 func (y *yamuxSession) Close() error              { return y.s.Close() }
 func (y *yamuxSession) IsClosed() bool            { return y.s.IsClosed() }

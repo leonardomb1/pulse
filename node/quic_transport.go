@@ -50,8 +50,8 @@ func (q *quicSession) Accept() (net.Conn, error) {
 	return &quicStream{stream: stream, conn: q.conn}, nil
 }
 
-func (q *quicSession) Close() error     { return q.conn.CloseWithError(0, "close") }
-func (q *quicSession) IsClosed() bool   {
+func (q *quicSession) Close() error { return q.conn.CloseWithError(0, "close") }
+func (q *quicSession) IsClosed() bool {
 	select {
 	case <-q.conn.Context().Done():
 		return true
@@ -67,9 +67,9 @@ type quicStream struct {
 	conn   *quic.Conn
 }
 
-func (s *quicStream) Read(p []byte) (int, error)  { return s.stream.Read(p) }
-func (s *quicStream) Write(p []byte) (int, error) { return s.stream.Write(p) }
-func (s *quicStream) Close() error                { return s.stream.Close() }
+func (s *quicStream) Read(p []byte) (int, error)         { return s.stream.Read(p) }
+func (s *quicStream) Write(p []byte) (int, error)        { return s.stream.Write(p) }
+func (s *quicStream) Close() error                       { return s.stream.Close() }
 func (s *quicStream) SetDeadline(t time.Time) error      { return s.stream.SetDeadline(t) }
 func (s *quicStream) SetReadDeadline(t time.Time) error  { return s.stream.SetReadDeadline(t) }
 func (s *quicStream) SetWriteDeadline(t time.Time) error { return s.stream.SetWriteDeadline(t) }
@@ -83,10 +83,10 @@ func listenQUIC(addr string, tlsCfg *tls.Config, onSession func(Session, string)
 	qtls.NextProtos = []string{"github.com/leonardomb1/pulse/1"}
 
 	ln, err := quic.ListenAddr(addr, qtls, &quic.Config{
-		MaxIncomingStreams:    4096,
-		KeepAlivePeriod:      15 * time.Second,
-		MaxIdleTimeout:       60 * time.Second,
-		EnableDatagrams:      false,
+		MaxIncomingStreams: 4096,
+		KeepAlivePeriod:    15 * time.Second,
+		MaxIdleTimeout:     60 * time.Second,
+		EnableDatagrams:    false,
 	})
 	if err != nil {
 		return err
@@ -118,8 +118,8 @@ func dialQUIC(ctx context.Context, peerAddr string, tlsCfg *tls.Config) (Session
 
 	conn, err := quic.DialAddr(qctx, peerAddr, qtls, &quic.Config{
 		MaxIncomingStreams: 4096,
-		KeepAlivePeriod:   15 * time.Second,
-		MaxIdleTimeout:    60 * time.Second,
+		KeepAlivePeriod:    15 * time.Second,
+		MaxIdleTimeout:     60 * time.Second,
 	})
 	if err != nil {
 		return nil, err

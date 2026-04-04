@@ -1,8 +1,8 @@
 package tests
 
 import (
-	"net"
 	"github.com/leonardomb1/pulse/node"
+	"net"
 	"testing"
 )
 

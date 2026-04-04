@@ -1,8 +1,8 @@
 package tests
 
 import (
-	"math"
 	"github.com/leonardomb1/pulse/node"
+	"math"
 	"testing"
 )
 
@@ -60,8 +60,8 @@ func TestMeshIPFromNodeID(t *testing.T) {
 		{"4353db8f32bad580", "10.100.67.83"},
 		{"20c6d3c9238f80c2", "10.100.32.198"},
 		{"f752d605d4522bfb", "10.100.247.82"},
-		{"", "10.100.0.1"},           // empty fallback
-		{"ab", "10.100.0.1"},          // too short
+		{"", "10.100.0.1"},   // empty fallback
+		{"ab", "10.100.0.1"}, // too short
 	}
 	for _, tt := range tests {
 		got := node.MeshIPFromNodeID(tt.nodeID).String()

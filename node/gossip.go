@@ -7,9 +7,9 @@ import (
 )
 
 const (
-	maxHopCount    = 16
-	peerStaleTTL   = 5 * time.Minute  // evict peers not seen within this window
-	pruneInterval  = 30 * time.Second // how often to sweep for stale entries
+	maxHopCount   = 16
+	peerStaleTTL  = 5 * time.Minute  // evict peers not seen within this window
+	pruneInterval = 30 * time.Second // how often to sweep for stale entries
 )
 
 // PeerEntry is a routing table record that is gossipped between nodes.
@@ -39,7 +39,7 @@ type PeerEntry struct {
 	ACL *NodeACL `json:"acl,omitempty"`
 
 	// Scribe role — collects stats and distributes NetworkConfig.
-	IsScribe     bool   `json:"is_scribe,omitempty"`
+	IsScribe      bool   `json:"is_scribe,omitempty"`
 	ScribeAPIAddr string `json:"scribe_api_addr,omitempty"` // HTTP API address of scribe
 
 	// Tun device — mesh IP assigned to this node.

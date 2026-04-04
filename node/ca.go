@@ -24,15 +24,15 @@ type CA struct {
 	Cert      *x509.Certificate
 	CertPEM   []byte
 	Pool      *x509.CertPool
-	JoinToken string     // legacy master token (fallback)
-	Audit     *AuditLog  // nil if audit logging not configured
+	JoinToken string    // legacy master token (fallback)
+	Audit     *AuditLog // nil if audit logging not configured
 
 	revokedMu  sync.RWMutex
 	revokedIDs map[string]struct{}
 
-	tokensMu   sync.RWMutex
-	tokens     []JoinToken    // scribe-managed tokens (synced via NetworkConfig)
-	OnTokenUsed func(string)  // callback when a token is used (wired to scribe)
+	tokensMu    sync.RWMutex
+	tokens      []JoinToken  // scribe-managed tokens (synced via NetworkConfig)
+	OnTokenUsed func(string) // callback when a token is used (wired to scribe)
 }
 
 // JoinRequest is sent by a new node to request a signed certificate.
