@@ -1,6 +1,6 @@
 # Binaries
-pulse
-pulse-*
+/pulse
+/pulse-*
 *.exe
 dist/
 
