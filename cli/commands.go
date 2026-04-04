@@ -1,0 +1,839 @@
+package cli
+
+import (
+	"context"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"text/tabwriter"
+	"time"
+
+	"pulse/client"
+	"pulse/config"
+	"pulse/node"
+	"pulse/tui"
+)
+
+func RunStart(args []string) {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Fatalf("start: resolve executable: %v", err)
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		log.Fatalf("start: %v", err)
+	}
+	fmt.Printf("pulse started (pid %d)\n", cmd.Process.Pid)
+}
+
+func RunStop(args []string) {
+	sock := SocketPath(args)
+	if _, err := CtrlDo(sock, map[string]string{"cmd": "stop"}); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("pulse stopped")
+}
+
+func RunStatus(args []string) {
+	sock := SocketPath(args)
+	resp, err := CtrlDo(sock, map[string]string{"cmd": "status"})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var self string
+	json.Unmarshal(resp["self"], &self)
+	selfMeshIP := node.MeshIPFromNodeID(self)
+
+	var networkID string
+	json.Unmarshal(resp["network_id"], &networkID)
+	netLabel := ""
+	if networkID != "" {
+		netLabel = fmt.Sprintf(" network: %s", networkID)
+	}
+	fmt.Printf("Node: %s (mesh: %s)%s\n\n", self, selfMeshIP, netLabel)
+
+	var peers []node.PeerEntry
+	json.Unmarshal(resp["peers"], &peers)
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "NODE ID\tNAME\tADDR\tMESH IP\tLATENCY\tLOSS%\tHOPS\tROLES\tTAGS\tLAST SEEN")
+	for _, p := range peers {
+		meshIP := p.MeshIP
+		if meshIP == "" {
+			meshIP = node.MeshIPFromNodeID(p.NodeID).String()
+		}
+		latency := "-"
+		if p.LatencyMS > 0 {
+			latency = fmt.Sprintf("%.1fms", p.LatencyMS)
+		}
+		loss := fmt.Sprintf("%.0f%%", p.LossRate*100)
+		lastSeen := "-"
+		if !p.LastSeen.IsZero() {
+			lastSeen = time.Since(p.LastSeen).Round(time.Second).String() + " ago"
+		}
+		roles := "-"
+		if p.IsCA || p.IsScribe || p.IsExit {
+			r := ""
+			if p.IsCA {
+				r += "CA "
+			}
+			if p.IsScribe {
+				r += "scribe "
+			}
+			if p.IsExit {
+				r += "exit"
+			}
+			roles = r
+		}
+		name := p.Name
+		if name == "" {
+			name = "-"
+		}
+		tags := "-"
+		if len(p.Tags) > 0 {
+			tags = strings.Join(p.Tags, ",")
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+			p.NodeID, name, p.Addr, meshIP, latency, loss, p.HopCount, roles, tags, lastSeen)
+	}
+	tw.Flush()
+}
+
+func RunID(args []string) {
+	fs := flag.NewFlagSet("id", flag.ExitOnError)
+	dataDir := fs.String("data-dir", "", "data directory (default ~/.pulse)")
+	configPath := fs.String("config", "", "path to config.toml")
+	fs.Parse(args)
+
+	dir := ResolveDataDir(*dataDir, *configPath)
+	identity, err := node.LoadOrCreateIdentity(dir)
+	if err != nil {
+		log.Fatalf("load identity: %v", err)
+	}
+	meshIP := node.MeshIPFromNodeID(identity.NodeID)
+	fmt.Printf("%s (mesh: %s)\n", identity.NodeID, meshIP)
+}
+
+func RunCert(args []string) {
+	fs := flag.NewFlagSet("cert", flag.ExitOnError)
+	dataDir := fs.String("data-dir", "", "data directory (default ~/.pulse)")
+	configPath := fs.String("config", "", "path to config.toml")
+	fs.Parse(args)
+
+	dir := ResolveDataDir(*dataDir, *configPath)
+
+	certPEM, err := os.ReadFile(filepath.Join(dir, "identity.crt"))
+	if err != nil {
+		log.Fatalf("read cert: %v", err)
+	}
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		log.Fatal("no PEM block in identity.crt")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		log.Fatalf("parse cert: %v", err)
+	}
+
+	remaining := time.Until(cert.NotAfter)
+	status := "valid"
+	if remaining <= 0 {
+		status = "EXPIRED"
+	} else if remaining < 30*24*time.Hour {
+		status = fmt.Sprintf("expiring soon (%s remaining)", remaining.Round(time.Hour))
+	}
+
+	fmt.Printf("Subject:   %s\n", cert.Subject.CommonName)
+	fmt.Printf("Issuer:    %s\n", cert.Issuer.CommonName)
+	fmt.Printf("NotBefore: %s\n", cert.NotBefore.Format(time.RFC3339))
+	fmt.Printf("NotAfter:  %s\n", cert.NotAfter.Format(time.RFC3339))
+	fmt.Printf("Remaining: %s\n", remaining.Round(time.Hour))
+	fmt.Printf("Serial:    %s\n", cert.SerialNumber.Text(16))
+	fmt.Printf("Status:    %s\n", status)
+
+	caCertPEM, err := os.ReadFile(filepath.Join(dir, "ca.crt"))
+	if err == nil {
+		caBlock, _ := pem.Decode(caCertPEM)
+		if caBlock != nil {
+			caCert, err := x509.ParseCertificate(caBlock.Bytes)
+			if err == nil {
+				fmt.Printf("\nCA:\n")
+				fmt.Printf("  Subject:  %s\n", caCert.Subject.CommonName)
+				fmt.Printf("  NotAfter: %s\n", caCert.NotAfter.Format(time.RFC3339))
+			}
+		}
+	}
+}
+
+func RunJoin(args []string) {
+	fs := flag.NewFlagSet("join", flag.ExitOnError)
+	token := fs.String("token", "", "join token (required)")
+	dataDir := fs.String("data-dir", "", "data directory (default ~/.pulse)")
+	configPath := fs.String("config", "", "path to config.toml")
+	fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: pulse join <relay-addr> --token <token>")
+		os.Exit(1)
+	}
+	relayAddr := fs.Arg(0)
+	dir := ResolveDataDir(*dataDir, *configPath)
+
+	caCertPath := filepath.Join(dir, "ca.crt")
+	if _, err := os.Stat(caCertPath); err == nil {
+		identity, err := node.LoadOrCreateIdentity(dir)
+		if err == nil {
+			fmt.Printf("already joined as %s (ca.crt exists in %s)\n", identity.NodeID, dir)
+			return
+		}
+	}
+
+	cfg := &config.Config{}
+	cfg.Node.DataDir = dir
+	if err := DoJoin(cfg, relayAddr, *token); err != nil {
+		log.Fatalf("join failed: %v", err)
+	}
+	identity, _ := node.LoadOrCreateIdentity(dir)
+	fmt.Printf("joined as %s\n", identity.NodeID)
+}
+
+func RunTag(args []string) {
+	fs := flag.NewFlagSet("tag", flag.ExitOnError)
+	sock := fs.String("socket", "", "control socket path")
+	configPath := fs.String("config", "", "path to config.toml")
+	fs.Parse(args)
+	if fs.NArg() < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: pulse tag <node-id> <tag>")
+		os.Exit(1)
+	}
+	path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+	if _, err := CtrlDo(path, map[string]string{"cmd": "tag-add", "node_id": fs.Arg(0), "tag": fs.Arg(1)}); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("tagged %s +%s\n", fs.Arg(0), fs.Arg(1))
+}
+
+func RunUntag(args []string) {
+	fs := flag.NewFlagSet("untag", flag.ExitOnError)
+	sock := fs.String("socket", "", "control socket path")
+	configPath := fs.String("config", "", "path to config.toml")
+	fs.Parse(args)
+	if fs.NArg() < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: pulse untag <node-id> <tag>")
+		os.Exit(1)
+	}
+	path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+	if _, err := CtrlDo(path, map[string]string{"cmd": "tag-remove", "node_id": fs.Arg(0), "tag": fs.Arg(1)}); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("untagged %s -%s\n", fs.Arg(0), fs.Arg(1))
+}
+
+func RunSetName(args []string) {
+	fs := flag.NewFlagSet("name", flag.ExitOnError)
+	sock := fs.String("socket", "", "control socket path")
+	configPath := fs.String("config", "", "path to config.toml")
+	fs.Parse(args)
+	if fs.NArg() < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: pulse name <node-id> <name>")
+		os.Exit(1)
+	}
+	path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+	if _, err := CtrlDo(path, map[string]string{"cmd": "name-set", "node_id": fs.Arg(0), "name": fs.Arg(1)}); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("named %s → %s\n", fs.Arg(0), fs.Arg(1))
+}
+
+func RunACL(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage: pulse acl <list|add|remove>")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "list":
+		sock := SocketPath(args[1:])
+		resp, err := CtrlDo(sock, map[string]string{"cmd": "acl-list"})
+		if err != nil {
+			log.Fatal(err)
+		}
+		var rules []node.ACLRule
+		json.Unmarshal(resp["rules"], &rules)
+		if len(rules) == 0 {
+			fmt.Println("no ACL rules (open by default)")
+			return
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "#\tACTION\tFROM\tTO\tPORTS")
+		for i, r := range rules {
+			action := r.Action
+			if action == "" {
+				action = "allow"
+			}
+			src := r.SrcPattern
+			if src == "" {
+				src = "*"
+			}
+			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n",
+				i, action, src, r.DstPattern, node.FormatPortRanges(r.Ports))
+		}
+		tw.Flush()
+
+	case "add":
+		fs := flag.NewFlagSet("acl add", flag.ExitOnError)
+		sock := fs.String("socket", "", "control socket path")
+		configPath := fs.String("config", "", "path to config.toml")
+		from := fs.String("from", "*", "source pattern")
+		to := fs.String("to", "*", "destination pattern")
+		ports := fs.String("ports", "", "port ranges (e.g. 22,80,443)")
+		deny := fs.Bool("deny", false, "deny rule (default: allow)")
+		fs.Parse(args[1:])
+		action := "allow"
+		if *deny {
+			action = "deny"
+		}
+		var portRanges []node.PortRange
+		if *ports != "" {
+			var err error
+			portRanges, err = node.ParsePortRanges(*ports)
+			if err != nil {
+				log.Fatalf("bad --ports: %v", err)
+			}
+		}
+		rule := node.ACLRule{Action: action, SrcPattern: *from, DstPattern: *to, Ports: portRanges}
+		path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+		if _, err := CtrlDo(path, map[string]interface{}{"cmd": "acl-add", "acl_rule": rule}); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("acl: %s %s → %s ports=%s\n", action, *from, *to, node.FormatPortRanges(portRanges))
+
+	case "remove":
+		fs := flag.NewFlagSet("acl remove", flag.ExitOnError)
+		sock := fs.String("socket", "", "control socket path")
+		configPath := fs.String("config", "", "path to config.toml")
+		fs.Parse(args[1:])
+		if fs.NArg() < 1 {
+			fmt.Fprintln(os.Stderr, "Usage: pulse acl remove <index>")
+			os.Exit(1)
+		}
+		idx, err := strconv.Atoi(fs.Arg(0))
+		if err != nil {
+			log.Fatalf("bad index: %v", err)
+		}
+		path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+		if _, err := CtrlDo(path, map[string]interface{}{"cmd": "acl-remove", "index": idx}); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("acl: removed rule #%d\n", idx)
+
+	default:
+		fmt.Printf("unknown acl subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func RunRevoke(args []string) {
+	fs := flag.NewFlagSet("revoke", flag.ExitOnError)
+	sock := fs.String("socket", "", "control socket path")
+	configPath := fs.String("config", "", "path to config.toml")
+	nodeID := fs.String("node", "", "node ID to revoke (required)")
+	fs.Parse(args)
+	if *nodeID == "" {
+		log.Fatal("--node is required")
+	}
+	path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+	if _, err := CtrlDo(path, map[string]string{"cmd": "revoke", "node_id": *nodeID}); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("node %s revoked\n", *nodeID)
+}
+
+func RunDNS(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage: pulse dns <list|add|remove>")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "list":
+		sock := SocketPath(args[1:])
+		resp, err := CtrlDo(sock, map[string]string{"cmd": "dns-list"})
+		if err != nil {
+			log.Fatal(err)
+		}
+		var zones []node.DNSZone
+		json.Unmarshal(resp["zones"], &zones)
+		if len(zones) == 0 {
+			fmt.Println("no custom DNS records")
+			return
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "NAME\tTYPE\tVALUE\tTTL")
+		for _, z := range zones {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\n", z.Name, z.Type, z.Value, z.TTL)
+		}
+		tw.Flush()
+
+	case "add":
+		fs := flag.NewFlagSet("dns add", flag.ExitOnError)
+		sock := fs.String("socket", "", "control socket path")
+		configPath := fs.String("config", "", "path to config.toml")
+		recType := fs.String("type", "A", "record type (A, CNAME, TXT)")
+		ttl := fs.Int("ttl", 300, "TTL in seconds")
+		fs.Parse(args[1:])
+		if fs.NArg() < 2 {
+			log.Fatal("usage: pulse dns add [--type A] <name> <value>")
+		}
+		path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+		zone := node.DNSZone{Name: fs.Arg(0), Type: *recType, Value: fs.Arg(1), TTL: uint32(*ttl)}
+		if _, err := CtrlDo(path, map[string]interface{}{"cmd": "dns-add", "zone": zone}); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("added %s %s → %s\n", zone.Name, zone.Type, zone.Value)
+
+	case "remove":
+		fs := flag.NewFlagSet("dns remove", flag.ExitOnError)
+		sock := fs.String("socket", "", "control socket path")
+		configPath := fs.String("config", "", "path to config.toml")
+		recType := fs.String("type", "", "record type (optional)")
+		fs.Parse(args[1:])
+		if fs.NArg() < 1 {
+			log.Fatal("usage: pulse dns remove <name>")
+		}
+		path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+		if _, err := CtrlDo(path, map[string]string{"cmd": "dns-remove", "name": fs.Arg(0), "type": *recType}); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("removed %s\n", fs.Arg(0))
+
+	default:
+		fmt.Printf("unknown dns subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func RunRoute(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage: pulse route <add|remove|list>")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "list":
+		sock := SocketPath(args[1:])
+		resp, err := CtrlDo(sock, map[string]string{"cmd": "route-list"})
+		if err != nil {
+			log.Fatal(err)
+		}
+		var routes []struct {
+			CIDR   string `json:"cidr"`
+			NodeID string `json:"node_id"`
+		}
+		json.Unmarshal(resp["routes"], &routes)
+		if len(routes) == 0 {
+			fmt.Println("no exit routes configured")
+			return
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "CIDR\tEXIT NODE")
+		for _, r := range routes {
+			fmt.Fprintf(tw, "%s\t%s\n", r.CIDR, r.NodeID)
+		}
+		tw.Flush()
+
+	case "add":
+		fs := flag.NewFlagSet("route add", flag.ExitOnError)
+		sock := fs.String("socket", "", "control socket path")
+		configPath := fs.String("config", "", "path to config.toml")
+		fs.Parse(args[1:])
+		rest := fs.Args()
+		if len(rest) != 3 || rest[1] != "via" {
+			fmt.Fprintln(os.Stderr, "Usage: pulse route add <cidr> via <node-id>")
+			os.Exit(1)
+		}
+		path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+		if _, err := CtrlDo(path, map[string]string{"cmd": "route-add", "cidr": rest[0], "via": rest[2]}); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("route added: %s via %s\n", rest[0], rest[2])
+
+	case "remove":
+		fs := flag.NewFlagSet("route remove", flag.ExitOnError)
+		sock := fs.String("socket", "", "control socket path")
+		configPath := fs.String("config", "", "path to config.toml")
+		fs.Parse(args[1:])
+		if fs.NArg() < 1 {
+			fmt.Fprintln(os.Stderr, "Usage: pulse route remove <cidr>")
+			os.Exit(1)
+		}
+		path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+		if _, err := CtrlDo(path, map[string]string{"cmd": "route-remove", "cidr": fs.Arg(0)}); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("route removed: %s\n", fs.Arg(0))
+
+	default:
+		fmt.Printf("unknown route subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func RunToken(args []string) {
+	if len(args) == 0 {
+		sock := SocketPath(args)
+		resp, err := CtrlDo(sock, map[string]string{"cmd": "token"})
+		if err != nil {
+			log.Fatal(err)
+		}
+		var token string
+		json.Unmarshal(resp["token"], &token)
+		fmt.Println(token)
+		return
+	}
+
+	switch args[0] {
+	case "create":
+		fs := flag.NewFlagSet("token create", flag.ExitOnError)
+		sock := fs.String("socket", "", "control socket path")
+		configPath := fs.String("config", "", "path to config.toml")
+		ttl := fs.String("ttl", "", "token TTL (e.g. 1h, 24h)")
+		maxUses := fs.Int("max-uses", 0, "max uses (0=unlimited)")
+		fs.Parse(args[1:])
+		path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+		resp, err := CtrlDo(path, map[string]interface{}{"cmd": "token-create", "ttl": *ttl, "max_uses": *maxUses})
+		if err != nil {
+			log.Fatal(err)
+		}
+		var t node.JoinToken
+		json.Unmarshal(resp["token"], &t)
+		fmt.Println(t.Value)
+
+	case "list":
+		sock := SocketPath(args[1:])
+		resp, err := CtrlDo(sock, map[string]string{"cmd": "token-list"})
+		if err != nil {
+			log.Fatal(err)
+		}
+		var tokens []node.JoinToken
+		json.Unmarshal(resp["tokens"], &tokens)
+		if len(tokens) == 0 {
+			fmt.Println("no tokens (using legacy --token)")
+			return
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "VALUE\tCREATED\tEXPIRES\tMAX\tUSED\tSTATUS")
+		for _, t := range tokens {
+			expires := "never"
+			if !t.ExpiresAt.IsZero() {
+				expires = t.ExpiresAt.Format(time.RFC3339)
+			}
+			maxStr := "unlimited"
+			if t.MaxUses > 0 {
+				maxStr = fmt.Sprint(t.MaxUses)
+			}
+			status := "valid"
+			if t.IsExpired() {
+				status = "expired"
+			} else if t.IsExhausted() {
+				status = "exhausted"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
+				t.Value[:16]+"...", t.CreatedAt.Format(time.RFC3339), expires, maxStr, t.UseCount, status)
+		}
+		tw.Flush()
+
+	case "revoke":
+		fs := flag.NewFlagSet("token revoke", flag.ExitOnError)
+		sock := fs.String("socket", "", "control socket path")
+		configPath := fs.String("config", "", "path to config.toml")
+		fs.Parse(args[1:])
+		if fs.NArg() < 1 {
+			fmt.Fprintln(os.Stderr, "Usage: pulse token revoke <prefix>")
+			os.Exit(1)
+		}
+		path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+		if _, err := CtrlDo(path, map[string]interface{}{"cmd": "token-revoke", "token_prefix": fs.Arg(0)}); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("token revoked (prefix=%s)\n", fs.Arg(0))
+
+	default:
+		fmt.Printf("unknown token subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func RunConnect(args []string) {
+	fs := flag.NewFlagSet("connect", flag.ExitOnError)
+	pulseAddr := fs.String("pulse", "localhost:7000", "pulse TCP listener address")
+	nodeID := fs.String("node", "", "destination node ID (required)")
+	destAddr := fs.String("dest", "", "destination address on target node (required)")
+	fs.Parse(args)
+	if *nodeID == "" || *destAddr == "" {
+		fmt.Fprintln(os.Stderr, "pulse connect: --node and --dest are required")
+		os.Exit(1)
+	}
+	conn, err := client.Dial(*pulseAddr, *nodeID, *destAddr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pulse connect: %v\n", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+	done := make(chan struct{}, 2)
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if n > 0 {
+				conn.Write(buf[:n])
+			}
+			if err != nil {
+				break
+			}
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := conn.Read(buf)
+			if n > 0 {
+				os.Stdout.Write(buf[:n])
+			}
+			if err != nil {
+				break
+			}
+		}
+		done <- struct{}{}
+	}()
+	<-done
+}
+
+func RunForward(args []string) {
+	fs := flag.NewFlagSet("forward", flag.ExitOnError)
+	pulseAddr := fs.String("pulse", "localhost:7000", "pulse TCP listener address")
+	nodeID := fs.String("node", "", "destination node ID (required)")
+	destAddr := fs.String("dest", "", "destination address on target node (required)")
+	localAddr := fs.String("local", "", "local listen address, e.g. :3389 (required)")
+	fs.Parse(args)
+	if *nodeID == "" || *destAddr == "" || *localAddr == "" {
+		fmt.Fprintln(os.Stderr, "pulse forward: --node, --dest and --local are required")
+		os.Exit(1)
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	fwd := client.NewForwarder(*pulseAddr, *nodeID, *destAddr)
+	log.Printf("forwarding %s → node %s → %s", *localAddr, *nodeID, *destAddr)
+	if err := fwd.ListenAndServe(ctx, *localAddr); err != nil {
+		log.Fatalf("forward: %v", err)
+	}
+}
+
+func RunCA(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage: pulse ca <log|sign>")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "log":
+		RunCALog(args[1:])
+	case "sign":
+		RunCASign(args[1:])
+	default:
+		fmt.Printf("unknown ca subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func RunCASign(args []string) {
+	fs := flag.NewFlagSet("ca sign", flag.ExitOnError)
+	caDir := fs.String("ca-dir", "", "CA data directory (required)")
+	identityKey := fs.String("identity", "", "path to node's identity.key (required)")
+	outDir := fs.String("out", ".", "directory to write identity.crt and ca.crt")
+	fs.Parse(args)
+	if *caDir == "" || *identityKey == "" {
+		log.Fatal("--ca-dir and --identity are required")
+	}
+	ca, err := node.LoadCA(*caDir, "")
+	if err != nil {
+		log.Fatalf("load CA: %v", err)
+	}
+	resp, nodeID, err := node.SignIdentityFromKeyFile(*identityKey, ca)
+	if err != nil {
+		log.Fatalf("sign: %v", err)
+	}
+	if err := node.StoreJoinResult(*outDir, resp); err != nil {
+		log.Fatalf("store: %v", err)
+	}
+	fmt.Printf("signed cert for node %s → %s/{identity.crt,ca.crt}\n", nodeID, *outDir)
+}
+
+func RunCALog(args []string) {
+	fs := flag.NewFlagSet("ca log", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config.toml")
+	sinceStr := fs.String("since", "", "show entries at or after this time (RFC3339)")
+	nodeFilter := fs.String("node", "", "filter by node ID")
+	fs.Parse(args)
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	auditPath := filepath.Join(cfg.CA.DataDir, "audit.log")
+	al, err := node.OpenAuditLog(auditPath)
+	if err != nil {
+		log.Fatalf("open audit log %s: %v", auditPath, err)
+	}
+	var entries []node.AuditEntry
+	if *nodeFilter != "" {
+		entries, err = al.ReadByNode(*nodeFilter)
+	} else if *sinceStr != "" {
+		t, parseErr := time.Parse(time.RFC3339, *sinceStr)
+		if parseErr != nil {
+			log.Fatalf("invalid --since time: %v", parseErr)
+		}
+		entries, err = al.ReadSince(t)
+	} else {
+		entries, err = al.ReadAll()
+	}
+	if err != nil {
+		log.Fatalf("read audit log: %v", err)
+	}
+	for _, e := range entries {
+		line, _ := json.Marshal(e)
+		fmt.Println(string(line))
+	}
+}
+
+func RunSetup(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Usage: pulse setup <dns>")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "dns":
+		RunSetupDNS(args[1:])
+	default:
+		fmt.Printf("unknown setup subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func RunSetupDNS(args []string) {
+	fs := flag.NewFlagSet("setup dns", flag.ExitOnError)
+	configPath := fs.String("config", "", "path to config.toml")
+	fs.Parse(args)
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	if !cfg.DNS.Enabled || cfg.DNS.Listen == "" {
+		log.Fatal("DNS is not enabled in config — set [dns] enabled=true and listen=<addr>")
+	}
+	const dropinDir = "/etc/systemd/resolved.conf.d"
+	const dropinPath = dropinDir + "/pulse.conf"
+	dropin := fmt.Sprintf("[Resolve]\nDNS=%s\nDomains=~pulse\n", cfg.DNS.Listen)
+	if err := os.MkdirAll(dropinDir, 0755); err != nil {
+		log.Fatalf("create %s: %v (try running with sudo)", dropinDir, err)
+	}
+	if err := os.WriteFile(dropinPath, []byte(dropin), 0644); err != nil {
+		log.Fatalf("write %s: %v (try running with sudo)", dropinPath, err)
+	}
+	fmt.Printf("wrote %s\n  DNS=%s\n  Domains=~pulse\n", dropinPath, cfg.DNS.Listen)
+	fmt.Println("restarting systemd-resolved...")
+	proc, _ := os.StartProcess("/usr/bin/systemctl", []string{"systemctl", "restart", "systemd-resolved"},
+		&os.ProcAttr{Files: []*os.File{os.Stdin, os.Stdout, os.Stderr}})
+	if proc != nil {
+		proc.Wait()
+	}
+	fmt.Println("ok")
+}
+
+func RunTop(args []string) {
+	sock := SocketPath(args)
+	if err := tui.New(sock).Run(); err != nil {
+		log.Fatalf("tui: %v", err)
+	}
+}
+
+func PrintUsage() {
+	fmt.Print(`pulse — mesh relay daemon
+
+Lifecycle:
+  pulse [flags] [peers...]                start in foreground
+  pulse start [flags] [peers...]          start as background daemon
+  pulse stop                              stop the running daemon
+  pulse id                                print this node's ID
+  pulse top                               interactive TUI dashboard
+
+Mesh:
+  pulse join <relay-addr> --token <tok>   join a mesh (one-time)
+  pulse status                            show live mesh status
+  pulse tag <node-id> <tag>               add a tag to a node
+  pulse untag <node-id> <tag>             remove a tag from a node
+  pulse name <node-id> <name>             set a friendly name for a node
+  pulse revoke --node <id>                revoke a node
+
+Policy:
+  pulse acl list                          show ACL rules
+  pulse acl add --from <pat> --to <pat>   add an ACL rule (--deny, --ports)
+  pulse acl remove <index>                remove an ACL rule
+
+Networking:
+  pulse connect --node <id> --dest <addr> open tunnel (SSH ProxyCommand)
+  pulse forward --node <id> ...           forward a local port through mesh
+  pulse dns list|add|remove               manage DNS records
+  pulse route list|add|remove             manage exit routes
+
+Admin:
+  pulse ca log                            inspect CA audit log
+  pulse ca sign --ca-dir <dir> ...        sign a node cert offline
+  pulse setup dns                         configure systemd-resolved for .pulse
+
+Node flags (no config file needed):
+  --config <file>        path to config.toml (optional, flags take precedence)
+  --data-dir <path>      persistent data directory (default ~/.pulse)
+  --addr <addr>          advertised address (default :8443)
+  --listen <addr>        bind address (default: same as --addr, use :443 behind NAT)
+  --tcp <addr>           TCP tunnel listener (default :7000)
+  --network <id>         network isolation ID (peers with different IDs are rejected)
+  --join <addr>          CA relay address (auto-join on startup if not yet joined)
+  --token <secret>       join token
+
+Feature flags:
+  --ca                   enable certificate authority
+  --ca-token <secret>    join token the CA accepts (defaults to --token)
+  --scribe               enable scribe (control plane + dashboard)
+  --scribe-listen <addr> scribe HTTP API (default 127.0.0.1:8080)
+  --socks                enable SOCKS5 proxy
+  --socks-listen <addr>  SOCKS5 address (default 127.0.0.1:1080)
+  --dns                  enable DNS server for .pulse
+  --dns-listen <addr>    DNS address (default 127.0.0.1:5353)
+  --tun                  enable TUN interface (Linux only)
+  --exit                 enable exit node
+
+Examples:
+  # Home node (CA + scribe + all services):
+  pulse --ca --scribe --socks --dns --tun --token mytoken
+
+  # Relay node:
+  pulse join relay.example.com:443 --token mytoken
+  pulse start --addr relay.example.com:443
+
+  # Client node:
+  pulse join relay.example.com:443 --token mytoken
+  pulse start --socks --dns --tun
+`)
+}

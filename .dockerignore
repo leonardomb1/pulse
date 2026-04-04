@@ -1,0 +1,14 @@
+pulse
+pulse-*
+dist/
+.pulse/
+ca/
+*.toml
+coverage.out
+.git
+.github
+.claude
+.idea
+.vscode
+.DS_Store
+README.md

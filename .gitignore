@@ -1,0 +1,29 @@
+# Binaries
+pulse
+pulse-*
+*.exe
+dist/
+
+# Data directories
+.pulse/
+ca/
+
+# Config (user-specific)
+*.toml
+
+# Coverage
+coverage.out
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
