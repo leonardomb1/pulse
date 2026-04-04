@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"pulse/config"
-	"pulse/node"
+	"github.com/leonardomb1/pulse/config"
+	"github.com/leonardomb1/pulse/node"
 )
 
 // NodeFlags registers all flags for running a node on the given FlagSet.

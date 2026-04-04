@@ -2,7 +2,7 @@ package tests
 
 import (
 	"math"
-	"pulse/node"
+	"github.com/leonardomb1/pulse/node"
 	"testing"
 )
 

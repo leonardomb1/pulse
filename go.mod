@@ -1,4 +1,4 @@
-module pulse
+module github.com/leonardomb1/pulse
 
 go 1.25.8
 

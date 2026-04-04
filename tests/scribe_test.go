@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"pulse/cli"
-	"pulse/config"
-	"pulse/node"
+	"github.com/leonardomb1/pulse/cli"
+	"github.com/leonardomb1/pulse/config"
+	"github.com/leonardomb1/pulse/node"
 	"testing"
 	"time"
 )

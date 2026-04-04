@@ -18,10 +18,10 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"pulse/client"
-	"pulse/config"
-	"pulse/node"
-	"pulse/tui"
+	"github.com/leonardomb1/pulse/client"
+	"github.com/leonardomb1/pulse/config"
+	"github.com/leonardomb1/pulse/node"
+	"github.com/leonardomb1/pulse/tui"
 )
 
 func RunStart(args []string) {

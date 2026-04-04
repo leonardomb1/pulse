@@ -3,7 +3,7 @@ package tests
 import (
 	"os"
 	"path/filepath"
-	"pulse/config"
+	"github.com/leonardomb1/pulse/config"
 	"testing"
 )
 

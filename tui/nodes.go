@@ -8,7 +8,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"pulse/node"
+	"github.com/leonardomb1/pulse/node"
 )
 
 func (a *App) renderNodes() {

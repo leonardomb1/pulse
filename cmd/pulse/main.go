@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"pulse/cli"
+	"github.com/leonardomb1/pulse/cli"
 )
 
 func main() {

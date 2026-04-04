@@ -26,38 +26,16 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/}
           LDFLAGS="-s -w -X main.version=${VERSION}"
 
-          # Linux
           GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/pulse-linux-amd64 ./cmd/pulse/
           GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/pulse-linux-arm64 ./cmd/pulse/
 
-          # macOS
-          GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/pulse-darwin-amd64 ./cmd/pulse/
-          GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/pulse-darwin-arm64 ./cmd/pulse/
-
-          # Windows
-          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/pulse-windows-amd64.exe ./cmd/pulse/
-
-          # Checksums
           cd dist && sha256sum * > checksums.txt
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          body: |
-            ## Platform support
-
-            | Platform | TUN (layer 3 VPN) | SOCKS/DNS/Tunnels/TUI | CA/Scribe/Relay |
-            |----------|-------------------|----------------------|-----------------|
-            | Linux amd64/arm64 | yes | yes | yes |
-            | macOS amd64/arm64 | no | yes | yes |
-            | Windows amd64 | no | yes | yes |
-
-            TUN requires Linux with `CAP_NET_ADMIN`. On macOS/Windows, use `--socks` and `pulse connect`/`pulse forward` to access the mesh.
           files: |
             dist/pulse-linux-amd64
             dist/pulse-linux-arm64
-            dist/pulse-darwin-amd64
-            dist/pulse-darwin-arm64
-            dist/pulse-windows-amd64.exe
             dist/checksums.txt

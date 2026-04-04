@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"pulse/cli"
-	"pulse/config"
-	"pulse/node"
+	"github.com/leonardomb1/pulse/cli"
+	"github.com/leonardomb1/pulse/config"
+	"github.com/leonardomb1/pulse/node"
 )
 
 // startTestDaemon starts a pulse daemon in-process for testing.

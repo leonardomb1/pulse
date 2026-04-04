@@ -80,7 +80,7 @@ func (s *quicStream) RemoteAddr() net.Addr               { return s.conn.RemoteA
 func listenQUIC(addr string, tlsCfg *tls.Config, onSession func(Session, string)) error {
 	// QUIC requires ALPN to be set.
 	qtls := tlsCfg.Clone()
-	qtls.NextProtos = []string{"pulse/1"}
+	qtls.NextProtos = []string{"github.com/leonardomb1/pulse/1"}
 
 	ln, err := quic.ListenAddr(addr, qtls, &quic.Config{
 		MaxIncomingStreams:    4096,
@@ -111,7 +111,7 @@ func listenQUIC(addr string, tlsCfg *tls.Config, onSession func(Session, string)
 // Returns nil if QUIC is unreachable (caller should fall back to WebSocket).
 func dialQUIC(ctx context.Context, peerAddr string, tlsCfg *tls.Config) (Session, error) {
 	qtls := tlsCfg.Clone()
-	qtls.NextProtos = []string{"pulse/1"}
+	qtls.NextProtos = []string{"github.com/leonardomb1/pulse/1"}
 
 	qctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()

@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -127,19 +126,10 @@ func (r *LinkRegistry) SessionOwner(s Session) string {
 	return ""
 }
 
-// reusePortListen creates a TCP listener with SO_REUSEPORT so multiple
-// goroutines can accept on the same port — the kernel load-balances between them.
+// reusePortListen creates a TCP listener. On Linux it sets SO_REUSEPORT
+// so the kernel load-balances across multiple goroutines.
 func reusePortListen(network, addr string) (net.Listener, error) {
-	lc := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			return c.Control(func(fd uintptr) {
-				// SO_REUSEPORT: allows multiple listeners on same address.
-				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, soReusePort, 1)
-				// SO_REUSEADDR: faster restart after crash.
-				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-			})
-		},
-	}
+	lc := net.ListenConfig{Control: setSocketOpts}
 	return lc.Listen(context.Background(), network, addr)
 }
 

@@ -2,6 +2,17 @@
 
 package node
 
-import "golang.org/x/sys/unix"
+import (
+	"syscall"
+
+	"golang.org/x/sys/unix"
+)
 
 const soReusePort = unix.SO_REUSEPORT
+
+func setSocketOpts(network, address string, c syscall.RawConn) error {
+	return c.Control(func(fd uintptr) {
+		syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, soReusePort, 1)
+		syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+	})
+}

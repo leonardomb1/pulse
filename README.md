@@ -1,10 +1,11 @@
 # pulse
 
 [![CI](https://github.com/leonardomb1/pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/leonardomb1/pulse/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/leonardomb1/pulse)](https://goreportcard.com/report/github.com/leonardomb1/pulse)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/leonardomb1/pulse)](https://go.dev/)
 [![Release](https://img.shields.io/github/v/release/leonardomb1/pulse?include_prereleases)](https://github.com/leonardomb1/pulse/releases)
+
+[![Go Report Card](https://goreportcard.com/badge/github.com/leonardomb1/pulse)](https://goreportcard.com/report/github.com/leonardomb1/pulse)
 
 A zero-config encrypted mesh network in a single binary. Nodes discover each other via gossip, traffic is routed by measured link quality, and the whole thing is managed from the CLI or an interactive TUI.
 

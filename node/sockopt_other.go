@@ -4,6 +4,8 @@ package node
 
 import "syscall"
 
-// SO_REUSEPORT is Linux-specific. On other platforms fall back to SO_REUSEADDR
-// which is already set separately, so this constant just needs to be defined.
-const soReusePort = syscall.SO_REUSEADDR
+const soReusePort = 0
+
+func setSocketOpts(network, address string, c syscall.RawConn) error {
+	return nil // no-op on non-Linux
+}

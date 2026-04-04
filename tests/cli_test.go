@@ -1,8 +1,8 @@
 package tests
 
 import (
-	"pulse/cli"
-	"pulse/config"
+	"github.com/leonardomb1/pulse/cli"
+	"github.com/leonardomb1/pulse/config"
 	"testing"
 )
 

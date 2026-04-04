@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"pulse/config"
+	"github.com/leonardomb1/pulse/config"
 )
 
 // streamMsg is the first JSON line on every yamux/QUIC stream.

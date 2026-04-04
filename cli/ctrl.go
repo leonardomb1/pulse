@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"pulse/config"
+	"github.com/leonardomb1/pulse/config"
 )
 
 // CtrlDo sends a JSON command to the daemon's control socket and returns the response.
