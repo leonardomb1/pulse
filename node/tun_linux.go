@@ -20,6 +20,13 @@ import (
 
 const tunRefreshInterval = 5 * time.Second
 
+// tunPkt carries a packet through the per-peer write queue.
+// buf is the pooled buffer that must be returned after writing.
+type tunPkt struct {
+	buf *[]byte
+	pkt []byte
+}
+
 type tunManager struct {
 	node     *Node
 	devName  string
@@ -36,7 +43,7 @@ type tunManager struct {
 	// Each peer has a dedicated writer goroutine that drains its channel and writes
 	// to the pipe — no write contention between peers.
 	peerQueuesMu sync.RWMutex
-	peerQueues   map[string]chan []byte // nodeID → packet channel
+	peerQueues   map[string]chan tunPkt // nodeID → packet channel
 
 	installedRoutesMu sync.Mutex
 	installedRoutes   map[string]struct{}
@@ -73,7 +80,7 @@ func NewTunDevice(n *Node, devName, meshCIDR string) (TunDevice, error) {
 		meshCIDR:        meshCIDR,
 		fd:              fd,
 		pipes:           make(map[string]net.Conn),
-		peerQueues:      make(map[string]chan []byte),
+		peerQueues:      make(map[string]chan tunPkt),
 		installedRoutes: make(map[string]struct{}),
 	}
 	emptyMap := make(map[ip4key]string)
@@ -158,20 +165,21 @@ func (t *tunManager) routeOutbound(pkt []byte) {
 		}
 	}
 
-	// Copy packet and send to the per-peer write queue.
-	cp := make([]byte, len(pkt))
+	// Copy packet into pooled buffer and send to the per-peer write queue.
+	pbuf := getPktBuf()
+	cp := (*pbuf)[:len(pkt)]
 	copy(cp, pkt)
 
 	q := t.getOrCreatePeerQueue(targetID, pipe)
 	select {
-	case q <- cp:
+	case q <- tunPkt{buf: pbuf, pkt: cp}:
 	default:
-		// Queue full — drop packet (back-pressure, better than blocking the reader).
+		putPktBuf(pbuf) // queue full — return buffer, drop packet
 	}
 }
 
 // getOrCreatePeerQueue returns (or creates) a per-peer write channel + writer goroutine.
-func (t *tunManager) getOrCreatePeerQueue(nodeID string, pipe net.Conn) chan []byte {
+func (t *tunManager) getOrCreatePeerQueue(nodeID string, pipe net.Conn) chan tunPkt {
 	t.peerQueuesMu.RLock()
 	q, ok := t.peerQueues[nodeID]
 	t.peerQueuesMu.RUnlock()
@@ -180,16 +188,14 @@ func (t *tunManager) getOrCreatePeerQueue(nodeID string, pipe net.Conn) chan []b
 	}
 
 	t.peerQueuesMu.Lock()
-	// Double-check after acquiring write lock.
 	if q, ok := t.peerQueues[nodeID]; ok {
 		t.peerQueuesMu.Unlock()
 		return q
 	}
-	q = make(chan []byte, 1024)
+	q = make(chan tunPkt, 1024)
 	t.peerQueues[nodeID] = q
 	t.peerQueuesMu.Unlock()
 
-	// Start dedicated writer goroutine for this peer.
 	go t.peerWriter(nodeID, pipe, q)
 	return q
 }
@@ -197,15 +203,17 @@ func (t *tunManager) getOrCreatePeerQueue(nodeID string, pipe net.Conn) chan []b
 // peerWriter drains the per-peer queue and writes packets to the pipe.
 // Batch-drains: after writing one packet, drains all immediately available
 // packets before yielding — coalesces syscalls under load.
-func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan []byte) {
+func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan tunPkt) {
 	defer func() {
 		t.peerQueuesMu.Lock()
 		delete(t.peerQueues, nodeID)
 		t.peerQueuesMu.Unlock()
 	}()
 
-	for pkt := range q {
-		if err := tunFrameWrite(pipe, pkt); err != nil {
+	for tp := range q {
+		err := tunFrameWrite(pipe, tp.pkt)
+		putPktBuf(tp.buf)
+		if err != nil {
 			t.pipesMu.Lock()
 			if t.pipes[nodeID] == pipe {
 				delete(t.pipes, nodeID)
@@ -219,8 +227,10 @@ func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan []byte) {
 		drained := true
 		for drained {
 			select {
-			case pkt = <-q:
-				if err := tunFrameWrite(pipe, pkt); err != nil {
+			case tp = <-q:
+				err := tunFrameWrite(pipe, tp.pkt)
+				putPktBuf(tp.buf)
+				if err != nil {
 					pipe.Close()
 					return
 				}

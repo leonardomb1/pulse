@@ -79,6 +79,7 @@ type TunConfig struct {
 	Enabled bool   `toml:"enabled"`
 	Name    string `toml:"name"` // interface name, default "pulse0"
 	CIDR    string `toml:"cidr"` // mesh IP range, default "10.100.0.0/16"
+	FEC     bool   `toml:"fec"`  // forward error correction on TUN pipes (lossy links)
 }
 
 type PersistConfig struct {

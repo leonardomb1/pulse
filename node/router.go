@@ -92,15 +92,17 @@ func (r *Router) Resolve(destNodeID string) (Session, error) {
 		}
 	}
 	var viable []Session
+	var scores []float64
 	for _, c := range candidates {
 		if c.score <= bestScore*2 {
 			viable = append(viable, c.session)
+			scores = append(scores, c.score)
 		}
 	}
 	if len(viable) == 1 {
 		return viable[0], nil
 	}
-	return NewMultipathSession(viable), nil
+	return NewMultipathSession(viable, scores), nil
 }
 
 // LinkScore computes a composite routing score for a peer entry.

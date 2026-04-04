@@ -2,75 +2,98 @@ package node
 
 import (
 	"fmt"
+	"math/rand"
 	"net"
 	"sync"
 	"sync/atomic"
 )
 
 // MultipathSession wraps multiple Sessions to the same logical destination
-// and provides connection-level load balancing across them.
+// and provides weighted load balancing across them.
 //
-// Open() picks the session with the fewest open streams — work spreads
-// evenly across paths, so a slow or congested relay doesn't bottleneck
-// all connections.
+// Open() uses inverse-score weighted random selection — better paths get
+// proportionally more traffic. A 5ms path gets ~10x more streams than a
+// 50ms path instead of an equal split.
 //
-// Accept() fans in from all underlying sessions via a single background
-// goroutine per MultipathSession. This avoids goroutine leaks that would
-// occur if every Accept() call spawned per-session goroutines.
+// Accept() fans in from all underlying sessions via background goroutines.
 type MultipathSession struct {
 	sessions []Session
-	counters []*atomic.Int64 // open stream count per session
+	counters []*atomic.Int64
+	weights  []float64 // normalized inverse-score weights, sum=1.0
 
-	// Fan-in for Accept().
 	once    sync.Once
 	fanCh   chan net.Conn
 	closeCh chan struct{}
 }
 
-func NewMultipathSession(sessions []Session) *MultipathSession {
+func NewMultipathSession(sessions []Session, scores []float64) *MultipathSession {
 	counters := make([]*atomic.Int64, len(sessions))
 	for i := range counters {
 		counters[i] = new(atomic.Int64)
 	}
-	m := &MultipathSession{
+
+	// Compute weights as inverse of scores, normalized to sum=1.0.
+	// Lower score = better path = higher weight.
+	weights := make([]float64, len(scores))
+	var totalInv float64
+	for i, s := range scores {
+		if s <= 0 {
+			s = 1 // avoid division by zero
+		}
+		weights[i] = 1.0 / s
+		totalInv += weights[i]
+	}
+	if totalInv > 0 {
+		for i := range weights {
+			weights[i] /= totalInv
+		}
+	}
+
+	return &MultipathSession{
 		sessions: sessions,
 		counters: counters,
+		weights:  weights,
 		fanCh:    make(chan net.Conn, 32),
 		closeCh:  make(chan struct{}),
 	}
-	return m
 }
 
-// Open picks the least-loaded live session and opens a stream on it.
+// Open picks a session using weighted random selection (better paths get more traffic).
 func (m *MultipathSession) Open() (net.Conn, error) {
-	best := -1
-	var bestLoad int64 = 1<<62 - 1
+	// Weighted random selection.
+	r := rand.Float64()
+	cumulative := 0.0
+	for i, w := range m.weights {
+		cumulative += w
+		if r <= cumulative && !m.sessions[i].IsClosed() {
+			m.counters[i].Add(1)
+			conn, err := m.sessions[i].Open()
+			if err != nil {
+				m.counters[i].Add(-1)
+				break // fall through to fallback
+			}
+			idx := i
+			return &countedConn{Conn: conn, onClose: func() { m.counters[idx].Add(-1) }}, nil
+		}
+	}
+
+	// Fallback: pick any open session (handles closed sessions in weighted pick).
 	for i, s := range m.sessions {
 		if s.IsClosed() {
 			continue
 		}
-		load := m.counters[i].Load()
-		if load < bestLoad {
-			bestLoad = load
-			best = i
+		m.counters[i].Add(1)
+		conn, err := s.Open()
+		if err != nil {
+			m.counters[i].Add(-1)
+			continue
 		}
+		idx := i
+		return &countedConn{Conn: conn, onClose: func() { m.counters[idx].Add(-1) }}, nil
 	}
-	if best < 0 {
-		return nil, fmt.Errorf("multipath: all sessions closed")
-	}
-
-	m.counters[best].Add(1)
-	conn, err := m.sessions[best].Open()
-	if err != nil {
-		m.counters[best].Add(-1)
-		return nil, err
-	}
-	idx := best
-	return &countedConn{Conn: conn, onClose: func() { m.counters[idx].Add(-1) }}, nil
+	return nil, fmt.Errorf("multipath: all sessions closed")
 }
 
-// Accept returns the next inbound stream from any of the underlying sessions.
-// Starts the background fan-in goroutine on first call.
 func (m *MultipathSession) Accept() (net.Conn, error) {
 	m.once.Do(m.startFanIn)
 	select {
@@ -84,7 +107,6 @@ func (m *MultipathSession) Accept() (net.Conn, error) {
 	}
 }
 
-// startFanIn starts one goroutine per session, all feeding fanCh.
 func (m *MultipathSession) startFanIn() {
 	var wg sync.WaitGroup
 	for _, s := range m.sessions {
@@ -105,10 +127,7 @@ func (m *MultipathSession) startFanIn() {
 			}
 		}(s)
 	}
-	go func() {
-		wg.Wait()
-		close(m.fanCh)
-	}()
+	go func() { wg.Wait(); close(m.fanCh) }()
 }
 
 func (m *MultipathSession) Close() error {
@@ -139,7 +158,6 @@ func (m *MultipathSession) Transport() string {
 	return fmt.Sprintf("multipath(%d)", len(m.sessions))
 }
 
-// countedConn wraps a net.Conn and calls onClose when Close() is called.
 type countedConn struct {
 	net.Conn
 	onClose   func()

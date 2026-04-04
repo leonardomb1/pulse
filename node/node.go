@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"slices"
 	"strings"
 	"time"
@@ -91,6 +92,11 @@ type Node struct {
 	scribe     *Scribe
 	netCfg     netConfigStore
 	shutdown   chan struct{} // closed by Stop() to trigger graceful shutdown
+
+	// Delta-gossip: track last-sent table version per peer.
+	gossipVersionsMu sync.Mutex
+	gossipVersions   map[string]uint64 // peerNodeID → last-sent version
+	lastFullGossip   time.Time         // time of last full table push
 }
 
 func New(cfg *config.Config, ca *CA) (*Node, error) {
@@ -149,7 +155,8 @@ func New(cfg *config.Config, ca *CA) (*Node, error) {
 		prober:     NewProber(registry, table),
 		aclTable:   aclTable,
 		exitRoutes: exitRoutes,
-		shutdown:   make(chan struct{}),
+		shutdown:        make(chan struct{}),
+		gossipVersions: make(map[string]uint64),
 	}
 
 	// Build the complete self-entry in one shot and force-write it.
@@ -862,21 +869,48 @@ func (n *Node) gossipLoop(ctx context.Context) {
 }
 
 func (n *Node) pushGossip() {
-	entries := n.table.Snapshot()
+	currentVersion := n.table.Version()
+	forceFullPush := time.Since(n.lastFullGossip) > 60*time.Second
+
 	for _, link := range n.registry.All() {
 		if link.IsClosed() {
 			continue
 		}
+
+		// Delta-gossip: only send entries that changed since our last push to this peer.
+		n.gossipVersionsMu.Lock()
+		lastVersion := n.gossipVersions[link.NodeID]
+		n.gossipVersionsMu.Unlock()
+
+		var entries []PeerEntry
+		if forceFullPush || lastVersion == 0 {
+			entries = n.table.Snapshot()
+		} else {
+			entries = n.table.SnapshotSince(lastVersion)
+			if len(entries) == 0 {
+				continue // nothing changed for this peer
+			}
+		}
+
 		conn, err := link.Open()
 		if err != nil {
 			continue
 		}
+		peerID := link.NodeID
 		go func(c net.Conn) {
 			defer c.Close()
 			msg := streamMsg{Type: "gossip", Entries: entries}
 			line, _ := json.Marshal(msg)
 			c.Write(append(line, '\n'))
+
+			n.gossipVersionsMu.Lock()
+			n.gossipVersions[peerID] = currentVersion
+			n.gossipVersionsMu.Unlock()
 		}(conn)
+	}
+
+	if forceFullPush {
+		n.lastFullGossip = time.Now()
 	}
 }
 

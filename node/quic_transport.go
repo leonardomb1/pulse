@@ -166,8 +166,14 @@ func connectBestTransport(ctx context.Context, peerAddr string, tlsCfg *tls.Conf
 		backoff = time.Second
 		onConnect(session)
 
-		for !session.IsClosed() {
-			time.Sleep(500 * time.Millisecond)
+		// Wait for session to close efficiently (no polling).
+		// QUIC sessions use context cancellation; yamux we poll as fallback.
+		if qs, ok := session.(*quicSession); ok {
+			<-qs.conn.Context().Done()
+		} else {
+			for !session.IsClosed() {
+				time.Sleep(500 * time.Millisecond)
+			}
 		}
 		Warnf("lost connection to %s — reconnecting", peerAddr)
 	}

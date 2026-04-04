@@ -48,16 +48,27 @@ type PeerEntry struct {
 	// Operator-assigned metadata (populated from NetworkConfig, not gossipped).
 	Name string   `json:"name,omitempty"`
 	Tags []string `json:"tags,omitempty"`
+
+	// Internal version stamp for delta-gossip (not serialized over the wire).
+	tableVersion uint64 `json:"-"`
 }
 
 // Table is a thread-safe routing table.
 type Table struct {
 	mu      sync.RWMutex
 	entries map[string]PeerEntry // keyed by NodeID
+	version uint64               // monotonic counter, incremented on every mutation
 }
 
 func NewTable() *Table {
 	return &Table{entries: make(map[string]PeerEntry)}
+}
+
+// Version returns the current table version (monotonic counter).
+func (t *Table) Version() uint64 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.version
 }
 
 // Upsert adds or updates an entry, keeping the freshest LastSeen and lowest HopCount.
@@ -69,6 +80,8 @@ func (t *Table) Upsert(e PeerEntry) {
 	}
 	existing, ok := t.entries[e.NodeID]
 	if !ok || e.LastSeen.After(existing.LastSeen) || e.HopCount < existing.HopCount {
+		t.version++
+		e.tableVersion = t.version
 		t.entries[e.NodeID] = e
 	}
 }
@@ -81,6 +94,8 @@ func (t *Table) UpsertForce(e PeerEntry) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.version++
+	e.tableVersion = t.version
 	t.entries[e.NodeID] = e
 }
 
@@ -128,6 +143,19 @@ func (t *Table) Snapshot() []PeerEntry {
 	out := make([]PeerEntry, 0, len(t.entries))
 	for _, e := range t.entries {
 		out = append(out, e)
+	}
+	return out
+}
+
+// SnapshotSince returns entries that changed after minVersion (for delta-gossip).
+func (t *Table) SnapshotSince(minVersion uint64) []PeerEntry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	var out []PeerEntry
+	for _, e := range t.entries {
+		if e.tableVersion > minVersion {
+			out = append(out, e)
+		}
 	}
 	return out
 }

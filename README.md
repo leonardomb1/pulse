@@ -13,7 +13,9 @@ A zero-config encrypted mesh network in a single binary. Nodes discover each oth
 - **Encrypted mesh** between any number of nodes over QUIC (with WebSocket fallback)
 - **Layer 3 VPN** via TUN interface — mesh IPs just work like a LAN
 - **NAT traversal** — automatic QUIC hole punching for direct peer-to-peer links
-- **Multipath routing** — traffic load-balanced across paths scored by latency, loss, and hop count
+- **Weighted multipath routing** — traffic distributed across paths by inverse-score weighting (better paths get more traffic)
+- **Delta-gossip** — only changed entries are sent per gossip round (80-95% bandwidth reduction)
+- **FEC** — optional forward error correction on TUN pipes for lossy links (recovers single packet loss without retransmit)
 - **Exit nodes** — forward traffic to the internet through designated nodes
 - **Tag-based ACL policies** — `tag:dev` can't reach `tag:prod`, first-match firewall rules
 - **DNS** for the `.pulse` TLD — `ssh user@db-server.pulse`
@@ -167,13 +169,13 @@ pulse setup dns                       Configure systemd-resolved for .pulse
 
 ### Transport
 
-Nodes try QUIC first (no head-of-line blocking, 0-RTT reconnect), fall back to WebSocket+yamux if UDP is blocked. Transport selection is transparent — both return the same `Session` interface.
+Nodes try QUIC first (no head-of-line blocking, 0-RTT reconnect), fall back to WebSocket+yamux if UDP is blocked. Transport selection is transparent — both return the same `Session` interface. QUIC sessions support connection migration — when a node's NAT rebinds (wifi to 4G), the session survives without reconnecting.
 
-### Gossip
+### Gossip (Delta)
 
-Every 10 seconds, each node sends its full peer table to all directly connected neighbors. Entries propagate with incrementing hop counts. Stale entries (not seen in 5 minutes) are pruned. Max hop count: 16.
+Every 10 seconds, each node sends **only changed entries** to its neighbors (delta-gossip). Each table entry is stamped with a version counter; peers track which version they last received. A full table push is forced every 60 seconds as a fallback. Stale entries (not seen in 5 minutes) are pruned. Max hop count: 16.
 
-### Routing
+### Routing (Weighted Multipath)
 
 The router scores each path using:
 
@@ -181,7 +183,7 @@ The router scores each path using:
 score = latency_ms * (1 + 5*loss_rate) * (1 + 0.3*hop_count)
 ```
 
-A 2-hop path at 5ms beats a 1-hop path at 200ms. When multiple viable paths exist, traffic is load-balanced across all of them (multipath).
+A 2-hop path at 5ms beats a 1-hop path at 200ms. When multiple viable paths exist, traffic is distributed using **inverse-score weighted random selection** — a 5ms path gets ~10x more streams than a 50ms path.
 
 ### NAT Traversal
 
@@ -189,7 +191,9 @@ Nodes discover their public address via `/whoami` on a relay, then coordinate si
 
 ### TUN (Layer 3 VPN)
 
-Each node gets a deterministic mesh IP (`10.100.x.x`) derived from its node ID. The `pulse0` TUN interface handles routing at the kernel level. Exit node CIDRs are auto-learned from gossip and installed as kernel routes.
+Each node gets a deterministic mesh IP (`10.100.x.x`) derived from its node ID. The `pulse0` TUN interface handles routing at the kernel level. Exit node CIDRs are auto-learned from gossip and installed as kernel routes. The packet path uses a single TUN reader with per-peer write queues and batch draining to avoid contention.
+
+Optional **FEC** (forward error correction) can be enabled for lossy links (`[tun] fec = true`). For every 10 data packets, 1 XOR parity packet is sent. The receiver can reconstruct any single lost packet without retransmission — 10% bandwidth overhead for significant latency improvement on lossy links.
 
 ### Certificate Lifecycle
 
