@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	fecGroupSize   = 10  // data packets per FEC group
+	fecGroupSize   = 10 // data packets per FEC group
 	fecFrameData   = 0
 	fecFrameParity = 1
 	fecHeaderSize  = 8 // type(1) + groupID(2) + index(1) + length(4)

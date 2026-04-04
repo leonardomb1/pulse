@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"sync"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/leonardomb1/pulse/config"
@@ -145,17 +145,17 @@ func New(cfg *config.Config, ca *CA) (*Node, error) {
 	}
 
 	n := &Node{
-		id:         identity.NodeID,
-		cfg:        cfg,
-		identity:   identity,
-		ca:         ca,
-		table:      table,
-		registry:   registry,
-		router:     router,
-		prober:     NewProber(registry, table),
-		aclTable:   aclTable,
-		exitRoutes: exitRoutes,
-		shutdown:        make(chan struct{}),
+		id:             identity.NodeID,
+		cfg:            cfg,
+		identity:       identity,
+		ca:             ca,
+		table:          table,
+		registry:       registry,
+		router:         router,
+		prober:         NewProber(registry, table),
+		aclTable:       aclTable,
+		exitRoutes:     exitRoutes,
+		shutdown:       make(chan struct{}),
 		gossipVersions: make(map[string]uint64),
 	}
 
