@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -25,14 +26,20 @@ type tunManager struct {
 	meshCIDR string
 	fd       *os.File
 
-	mu     sync.RWMutex
-	ipToID map[ip4key]string // mesh IP (4 bytes) → nodeID
+	// Atomic pointer swap — readers never lock.
+	ipToID atomic.Pointer[map[ip4key]string]
 
 	pipesMu sync.RWMutex
 	pipes   map[string]net.Conn // nodeID → persistent bidirectional stream
 
+	// Per-peer write queues: packets are routed to destination-specific channels.
+	// Each peer has a dedicated writer goroutine that drains its channel and writes
+	// to the pipe — no write contention between peers.
+	peerQueuesMu sync.RWMutex
+	peerQueues   map[string]chan []byte // nodeID → packet channel
+
 	installedRoutesMu sync.Mutex
-	installedRoutes   map[string]struct{} // CIDRs with kernel routes installed
+	installedRoutes   map[string]struct{}
 }
 
 func NewTunDevice(n *Node, devName, meshCIDR string) (TunDevice, error) {
@@ -60,64 +67,167 @@ func NewTunDevice(n *Node, devName, meshCIDR string) (TunDevice, error) {
 	}
 
 	Infof("tun: interface %s up, mesh IP %s/%s", devName, meshIP, meshCIDR)
-	return &tunManager{
+	t := &tunManager{
 		node:            n,
 		devName:         devName,
 		meshCIDR:        meshCIDR,
 		fd:              fd,
-		ipToID:          make(map[ip4key]string),
 		pipes:           make(map[string]net.Conn),
+		peerQueues:      make(map[string]chan []byte),
 		installedRoutes: make(map[string]struct{}),
-	}, nil
+	}
+	emptyMap := make(map[ip4key]string)
+	t.ipToID.Store(&emptyMap)
+	return t, nil
 }
 
 func (t *tunManager) Run(ctx context.Context) {
 	go t.refreshMeshIPs(ctx)
 
-	type tunPkt struct {
-		buf *[]byte // pool buffer, must be returned
-		pkt []byte  // slice within buf
-	}
-
-	// Bounded worker pool to avoid unbounded goroutine churn per packet.
-	pktCh := make(chan tunPkt, 256)
-	const workers = 32
-	for i := 0; i < workers; i++ {
-		go func() {
-			for tp := range pktCh {
-				t.routePacket(tp.pkt)
-				putPktBuf(tp.buf)
-			}
-		}()
-	}
-
+	// WireGuard-inspired pipeline:
+	//   single reader → per-peer channel → per-peer writer → pipe
+	//
+	// Single reader avoids TUN fd contention.
+	// Per-peer channels avoid pipe write contention.
+	// Per-peer writers batch-drain their channel for fewer syscalls.
 	buf := make([]byte, 65535)
 	for {
-		select {
-		case <-ctx.Done():
-			close(pktCh)
+		if ctx.Err() != nil {
 			t.fd.Close()
 			return
-		default:
 		}
-
 		n, err := t.fd.Read(buf)
 		if err != nil {
 			if ctx.Err() != nil {
-				close(pktCh)
+				t.fd.Close()
 				return
 			}
-			tunLog("read error: %v", err)
 			continue
 		}
-		if n < 20 {
+		if n < 20 || buf[0]>>4 != 4 {
 			continue
 		}
-		// Use pooled buffer to avoid per-packet allocation.
-		pbuf := getPktBuf()
-		pkt := (*pbuf)[:n]
-		copy(pkt, buf[:n])
-		pktCh <- tunPkt{buf: pbuf, pkt: pkt}
+		t.routeOutbound(buf[:n])
+	}
+}
+
+// routeOutbound routes a packet to the appropriate per-peer write queue.
+func (t *tunManager) routeOutbound(pkt []byte) {
+	key := dstIPKey(pkt)
+
+	m := *t.ipToID.Load()
+	nodeID, ok := m[key]
+	if !ok {
+		exitNodeID := t.node.exitRoutes.Lookup(net.IP(key[:]))
+		if exitNodeID == "" {
+			return
+		}
+		nodeID = exitNodeID
+	}
+
+	// Resolve the actual pipe target (direct peer or relay).
+	targetID := nodeID
+	t.pipesMu.RLock()
+	pipe := t.pipes[nodeID]
+	t.pipesMu.RUnlock()
+
+	if pipe == nil {
+		// Try relay path.
+		session, err := t.node.router.Resolve(nodeID)
+		if err != nil {
+			return
+		}
+		relayID := t.node.registry.SessionOwner(session)
+		if relayID != "" {
+			t.pipesMu.RLock()
+			pipe = t.pipes[relayID]
+			t.pipesMu.RUnlock()
+			targetID = relayID
+		}
+		if pipe == nil {
+			// Last resort: one-shot stream (before any pipe is ready).
+			conn, err := session.Open()
+			if err != nil {
+				return
+			}
+			hdr, _ := marshalStreamMsg(streamMsg{Type: "tun", NodeID: t.node.id})
+			conn.Write(hdr)
+			tunFrameWrite(conn, pkt)
+			conn.Close()
+			return
+		}
+	}
+
+	// Copy packet and send to the per-peer write queue.
+	cp := make([]byte, len(pkt))
+	copy(cp, pkt)
+
+	q := t.getOrCreatePeerQueue(targetID, pipe)
+	select {
+	case q <- cp:
+	default:
+		// Queue full — drop packet (back-pressure, better than blocking the reader).
+	}
+}
+
+// getOrCreatePeerQueue returns (or creates) a per-peer write channel + writer goroutine.
+func (t *tunManager) getOrCreatePeerQueue(nodeID string, pipe net.Conn) chan []byte {
+	t.peerQueuesMu.RLock()
+	q, ok := t.peerQueues[nodeID]
+	t.peerQueuesMu.RUnlock()
+	if ok {
+		return q
+	}
+
+	t.peerQueuesMu.Lock()
+	// Double-check after acquiring write lock.
+	if q, ok := t.peerQueues[nodeID]; ok {
+		t.peerQueuesMu.Unlock()
+		return q
+	}
+	q = make(chan []byte, 1024)
+	t.peerQueues[nodeID] = q
+	t.peerQueuesMu.Unlock()
+
+	// Start dedicated writer goroutine for this peer.
+	go t.peerWriter(nodeID, pipe, q)
+	return q
+}
+
+// peerWriter drains the per-peer queue and writes packets to the pipe.
+// Batch-drains: after writing one packet, drains all immediately available
+// packets before yielding — coalesces syscalls under load.
+func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan []byte) {
+	defer func() {
+		t.peerQueuesMu.Lock()
+		delete(t.peerQueues, nodeID)
+		t.peerQueuesMu.Unlock()
+	}()
+
+	for pkt := range q {
+		if err := tunFrameWrite(pipe, pkt); err != nil {
+			t.pipesMu.Lock()
+			if t.pipes[nodeID] == pipe {
+				delete(t.pipes, nodeID)
+			}
+			t.pipesMu.Unlock()
+			pipe.Close()
+			return
+		}
+
+		// Batch drain: write all queued packets without blocking.
+		drained := true
+		for drained {
+			select {
+			case pkt = <-q:
+				if err := tunFrameWrite(pipe, pkt); err != nil {
+					pipe.Close()
+					return
+				}
+			default:
+				drained = false
+			}
+		}
 	}
 }
 
@@ -170,9 +280,8 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 		// through that peer's pipe instead of writing to TUN.
 		if len(pkt) >= 20 && pkt[0]>>4 == 4 {
 			key := dstIPKey(pkt)
-			t.mu.RLock()
-			fwdNodeID, ok := t.ipToID[key]
-			t.mu.RUnlock()
+			m := *t.ipToID.Load()
+			fwdNodeID, ok := m[key]
 			if ok && fwdNodeID != nodeID {
 				t.pipesMu.RLock()
 				fwdPipe := t.pipes[fwdNodeID]
@@ -193,76 +302,6 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 	}
 }
 
-// routePacket routes an outbound IPv4 packet through the mesh via the peer pipe.
-func (t *tunManager) routePacket(pkt []byte) {
-	if len(pkt) < 20 || pkt[0]>>4 != 4 {
-		return
-	}
-	key := dstIPKey(pkt)
-
-	t.mu.RLock()
-	nodeID, ok := t.ipToID[key]
-	t.mu.RUnlock()
-	if !ok {
-		// Not a mesh IP — check exit routes for external traffic.
-		exitNodeID := t.node.exitRoutes.Lookup(net.IP(key[:]))
-		if exitNodeID == "" {
-			return
-		}
-		nodeID = exitNodeID
-	}
-
-	// Fast path: send through persistent pipe (zero stream-open overhead).
-	t.pipesMu.RLock()
-	pipe := t.pipes[nodeID]
-	t.pipesMu.RUnlock()
-
-	if pipe != nil {
-		if err := tunFrameWrite(pipe, pkt); err != nil {
-			tunLog("pipe write to %s: %v", nodeID, err)
-			t.pipesMu.Lock()
-			if t.pipes[nodeID] == pipe {
-				delete(t.pipes, nodeID)
-			}
-			t.pipesMu.Unlock()
-			pipe.Close()
-		}
-		return
-	}
-
-	// No direct pipe — find a relay that can forward the packet.
-	// The router knows the best next-hop for the destination node; if that
-	// next-hop has a pipe, send the packet there for forwarding.
-	session, err := t.node.router.Resolve(nodeID)
-	if err != nil {
-		return
-	}
-	// Identify which peer owns this session and use their pipe.
-	relayID := t.node.registry.SessionOwner(session)
-	if relayID != "" {
-		t.pipesMu.RLock()
-		relayPipe := t.pipes[relayID]
-		t.pipesMu.RUnlock()
-		if relayPipe != nil {
-			tunFrameWrite(relayPipe, pkt)
-			return
-		}
-	}
-
-	// Last resort: open a one-shot stream (happens only before any pipe is ready).
-	conn, err := session.Open()
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-
-	hdr, _ := marshalStreamMsg(streamMsg{Type: "tun", NodeID: t.node.id})
-	if _, err := conn.Write(hdr); err != nil {
-		return
-	}
-	tunFrameWrite(conn, pkt)
-}
-
 // RefreshMeshIPs immediately rebuilds the IP→nodeID map from the gossip table
 // and syncs auto-learned exit routes.
 func (t *tunManager) RefreshMeshIPs() {
@@ -278,9 +317,8 @@ func (t *tunManager) RefreshMeshIPs() {
 			}
 		}
 	}
-	t.mu.Lock()
-	t.ipToID = m
-	t.mu.Unlock()
+	// Atomic swap — readers never lock.
+	t.ipToID.Store(&m)
 
 	// Sync exit routes from gossip and install kernel routes.
 	t.node.exitRoutes.SyncFromGossip(t.node.table.ExitNodes())
