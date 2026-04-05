@@ -85,6 +85,14 @@ func main() {
 		case "help", "--help", "-h":
 			cli.PrintUsage()
 			return
+		default:
+			// Unknown subcommand — if it looks like a command (no dash prefix),
+			// show help. Otherwise treat as a flag for RunNode.
+			if os.Args[1][0] != '-' {
+				fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1])
+				cli.PrintUsage()
+				os.Exit(1)
+			}
 		}
 	}
 	cli.RunNode(os.Args[1:])

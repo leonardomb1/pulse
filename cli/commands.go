@@ -859,6 +859,7 @@ Lifecycle:
   pulse start [flags] [peers...]          start as background daemon
   pulse stop                              stop the running daemon
   pulse id                                print this node's ID
+  pulse cert                              show certificate expiry and status
   pulse top                               interactive TUI dashboard
 
 Mesh:
@@ -874,14 +875,26 @@ Policy:
   pulse acl add --from <pat> --to <pat>   add an ACL rule (--deny, --ports)
   pulse acl remove <index>                remove an ACL rule
 
+Tokens:
+  pulse token                             show master join token (CA only)
+  pulse token create --ttl 1h             create a time-limited token
+  pulse token create --max-uses 1         create a single-use token
+  pulse token list                        list all tokens
+  pulse token revoke <prefix>             revoke a token
+
 Networking:
   pulse connect --node <id> --dest <addr> open tunnel (SSH ProxyCommand)
   pulse forward --node <id> ...           forward a local port through mesh
   pulse dns list|add|remove               manage DNS records
   pulse route list|add|remove             manage exit routes
 
+Observability:
+  pulse events [--type X] [--node X]      query event log
+  pulse logs                              stream live events from daemon
+  pulse stats [node-id]                   show per-peer stats time series
+
 Admin:
-  pulse ca log                            inspect CA audit log
+  pulse ca log                            inspect CA event history
   pulse ca sign --ca-dir <dir> ...        sign a node cert offline
   pulse setup dns                         configure systemd-resolved for .pulse
 
@@ -894,6 +907,7 @@ Node flags (no config file needed):
   --network <id>         network isolation ID (peers with different IDs are rejected)
   --join <addr>          CA relay address (auto-join on startup if not yet joined)
   --token <secret>       join token
+  --log-level <level>    debug, info, warn, error (default: info)
 
 Feature flags:
   --ca                   enable certificate authority
@@ -905,7 +919,9 @@ Feature flags:
   --dns                  enable DNS server for .pulse
   --dns-listen <addr>    DNS address (default 127.0.0.1:5353)
   --tun                  enable TUN interface (Linux only)
+  --fec                  forward error correction on TUN pipes (lossy links)
   --exit                 enable exit node
+  --exit-cidrs <cidrs>   comma-separated CIDRs this exit node advertises
 
 Examples:
   # Home node (CA + scribe + all services):
@@ -913,10 +929,13 @@ Examples:
 
   # Relay node:
   pulse join relay.example.com:443 --token mytoken
-  pulse start --addr relay.example.com:443
+  pulse start --addr relay.example.com:443 --tun
 
   # Client node:
   pulse join relay.example.com:443 --token mytoken
   pulse start --socks --dns --tun
+
+  # Exit node:
+  pulse start --exit --exit-cidrs 0.0.0.0/0 --tun relay.example.com:443
 `)
 }
