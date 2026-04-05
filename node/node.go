@@ -869,6 +869,12 @@ func (n *Node) gossipLoop(ctx context.Context) {
 }
 
 func (n *Node) pushGossip() {
+	// Refresh self-entry timestamp so peers don't prune us as stale.
+	if self, ok := n.table.Get(n.id); ok {
+		self.LastSeen = time.Now()
+		n.table.UpsertForce(self)
+	}
+
 	currentVersion := n.table.Version()
 	forceFullPush := time.Since(n.lastFullGossip) > 60*time.Second
 
