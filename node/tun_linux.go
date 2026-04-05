@@ -210,8 +210,28 @@ func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan tunPkt) {
 		t.peerQueuesMu.Unlock()
 	}()
 
+	useFEC := t.node.cfg.Tun.FEC
+	var enc *fecEncoder
+	if useFEC {
+		enc = NewFECEncoder()
+	}
+
+	writePacket := func(pkt []byte) error {
+		if !useFEC {
+			return tunFrameWrite(pipe, pkt)
+		}
+		ready, err := enc.AddAndWrite(pipe, pkt)
+		if err != nil {
+			return err
+		}
+		if ready {
+			return enc.FlushParity(pipe)
+		}
+		return nil
+	}
+
 	for tp := range q {
-		err := tunFrameWrite(pipe, tp.pkt)
+		err := writePacket(tp.pkt)
 		putPktBuf(tp.buf)
 		if err != nil {
 			t.pipesMu.Lock()
@@ -228,7 +248,7 @@ func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan tunPkt) {
 		for drained {
 			select {
 			case tp = <-q:
-				err := tunFrameWrite(pipe, tp.pkt)
+				err := writePacket(tp.pkt)
 				putPktBuf(tp.buf)
 				if err != nil {
 					pipe.Close()
@@ -279,13 +299,51 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 		conn.Close()
 	}()
 
-	tunLog("pipe established with %s", nodeID)
+	tunLog("pipe established with %s (fec=%v)", nodeID, t.node.cfg.Tun.FEC)
+
+	useFEC := t.node.cfg.Tun.FEC
+	var dec *fecDecoder
+	if useFEC {
+		dec = NewFECDecoder()
+	}
+
 	for {
-		buf, pkt, err := tunFrameReadPooled(conn)
-		if err != nil {
-			tunLog("pipe to %s closed: %v", nodeID, err)
-			return
+		var pkt []byte
+		var buf *[]byte
+
+		if useFEC {
+			ft, gid, idx, payload, err := FECFrameRead(conn)
+			if err != nil {
+				tunLog("pipe to %s closed: %v", nodeID, err)
+				return
+			}
+			// Feed to decoder — may return a recovered packet.
+			recovered := dec.Add(ft, gid, idx, payload)
+			if ft == fecFrameParity {
+				// Parity frame — only useful for recovery, not a data packet.
+				if recovered != nil {
+					pkt = recovered
+				} else {
+					continue
+				}
+			} else {
+				pkt = payload
+			}
+			if recovered != nil && ft == fecFrameParity {
+				// Already handled above.
+			} else if recovered != nil {
+				// A previous missing packet was recovered — write it too.
+				t.fd.Write(recovered)
+			}
+		} else {
+			var err error
+			buf, pkt, err = tunFrameReadPooled(conn)
+			if err != nil {
+				tunLog("pipe to %s closed: %v", nodeID, err)
+				return
+			}
 		}
+
 		// If the packet is destined for another mesh peer, forward it directly
 		// through that peer's pipe instead of writing to TUN.
 		if len(pkt) >= 20 && pkt[0]>>4 == 4 {
@@ -298,17 +356,23 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 				t.pipesMu.RUnlock()
 				if fwdPipe != nil {
 					tunFrameWrite(fwdPipe, pkt)
-					putPktBuf(buf)
+					if buf != nil {
+						putPktBuf(buf)
+					}
 					continue
 				}
 			}
 		}
 		if _, err := t.fd.Write(pkt); err != nil {
-			putPktBuf(buf)
+			if buf != nil {
+				putPktBuf(buf)
+			}
 			tunLog("write to tun from %s: %v", nodeID, err)
 			return
 		}
-		putPktBuf(buf)
+		if buf != nil {
+			putPktBuf(buf)
+		}
 	}
 }
 

@@ -14,7 +14,7 @@ func TestApplyFlagsDataDir(t *testing.T) {
 		false, "",
 		false, "",
 		false, "",
-		false,
+		false, false,
 		false, "",
 		false,
 	)
@@ -41,7 +41,7 @@ func TestApplyFlagsFeatures(t *testing.T) {
 		true, "ca-secret",
 		true, "127.0.0.1:1081",
 		true, "127.0.0.1:5454",
-		true,
+		true, false,
 		true, "0.0.0.0:9090",
 		true,
 	)
@@ -90,7 +90,7 @@ func TestApplyFlagsCATokenFallback(t *testing.T) {
 		true, "",
 		false, "",
 		false, "",
-		false,
+		false, false,
 		false, "",
 		false,
 	)
@@ -110,7 +110,7 @@ func TestApplyFlagsNoOverrideDefaults(t *testing.T) {
 		false, "",
 		false, "",
 		false, "",
-		false,
+		false, false,
 		false, "",
 		false,
 	)

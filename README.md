@@ -162,6 +162,7 @@ pulse setup dns                       Configure systemd-resolved for .pulse
 --dns                  DNS server for .pulse TLD
 --dns-listen <addr>    DNS address (default 127.0.0.1:5353)
 --tun                  TUN interface for layer 3 routing (Linux)
+--fec                  Forward error correction on TUN pipes (lossy links)
 --exit                 Exit node (forwards traffic to internet)
 ```
 

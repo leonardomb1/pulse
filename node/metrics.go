@@ -70,7 +70,7 @@ func (s *Scribe) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			name = p.NodeID[:8]
 		}
 		labels := fmt.Sprintf(`node_id=%q,name=%q`, p.NodeID, name)
-		if p.LatencyMS > 0 {
+		if p.LatencyMS > 0 && p.LatencyMS < 1e15 {
 			fmt.Fprintf(&b, "pulse_peer_latency_ms{%s} %.2f\n", labels, p.LatencyMS)
 		}
 		fmt.Fprintf(&b, "pulse_peer_loss_ratio{%s} %.4f\n", labels, p.LossRate)

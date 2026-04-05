@@ -40,7 +40,7 @@ func (a *App) renderNodes() {
 		}
 
 		latency := "-"
-		if p.LatencyMS > 0 {
+		if p.LatencyMS > 0 && p.LatencyMS < 1e15 {
 			latency = fmt.Sprintf("%.1fms", p.LatencyMS)
 		}
 

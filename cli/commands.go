@@ -78,7 +78,7 @@ func RunStatus(args []string) {
 			meshIP = node.MeshIPFromNodeID(p.NodeID).String()
 		}
 		latency := "-"
-		if p.LatencyMS > 0 {
+		if p.LatencyMS > 0 && p.LatencyMS < 1e15 {
 			latency = fmt.Sprintf("%.1fms", p.LatencyMS)
 		}
 		loss := fmt.Sprintf("%.0f%%", p.LossRate*100)

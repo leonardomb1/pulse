@@ -446,6 +446,69 @@ func TestDockerHopAndLatency(t *testing.T) {
 	})
 }
 
+// TestDockerFEC verifies FEC-enabled TUN pipes work end-to-end.
+func TestDockerFEC(t *testing.T) {
+	if os.Getenv("PULSE_DOCKER_TEST") == "" {
+		t.Skip("set PULSE_DOCKER_TEST=1 to run Docker integration tests")
+	}
+	if !dockerAvailable() {
+		t.Skip("docker not available")
+	}
+
+	buildImage(t)
+	createNetwork(t)
+	defer cleanup("pulse-fec-ca", "pulse-fec-client")
+
+	// CA with FEC enabled via --fec flag.
+	startContainer(t, "pulse-fec-ca", caIP,
+		"--ca", "--scribe", "--tun", "--fec",
+		"--addr", caIP+":8443",
+		"--network", "fec-test",
+		"--token", testToken,
+	)
+	waitForSocket(t, "pulse-fec-ca", 15*time.Second)
+
+	// Client with FEC enabled.
+	startContainer(t, "pulse-fec-client", relayIP,
+		"--tun", "--fec",
+		"--addr", relayIP+":8443",
+		"--join", caIP+":8443",
+		"--token", testToken,
+		"--network", "fec-test",
+		caIP+":8443",
+	)
+	waitForSocket(t, "pulse-fec-client", 15*time.Second)
+
+	time.Sleep(15 * time.Second)
+
+	t.Run("Ping through FEC pipe", func(t *testing.T) {
+		caMeshIP := extractMeshIP(t, "pulse-fec-ca")
+		if caMeshIP == "" {
+			t.Skip("could not parse CA mesh IP")
+		}
+		out, err := dockerExec("pulse-fec-client", "ping", "-c", "5", "-W", "5", caMeshIP)
+		if err != nil {
+			t.Errorf("ping through FEC pipe failed:\n%s", out)
+		} else if strings.Contains(out, "100% packet loss") {
+			t.Errorf("100%% packet loss through FEC pipe:\n%s", out)
+		}
+	})
+
+	t.Run("Bidirectional FEC pipe", func(t *testing.T) {
+		// Verify the reverse direction too — CA pings client.
+		clientMeshIP := extractMeshIP(t, "pulse-fec-client")
+		if clientMeshIP == "" {
+			t.Skip("could not parse client mesh IP")
+		}
+		out, err := dockerExec("pulse-fec-ca", "ping", "-c", "5", "-W", "5", clientMeshIP)
+		if err != nil {
+			t.Errorf("reverse ping through FEC pipe failed:\n%s", out)
+		} else if strings.Contains(out, "100% packet loss") {
+			t.Errorf("100%% packet loss on reverse FEC pipe:\n%s", out)
+		}
+	})
+}
+
 // TestDockerExitNode tests exit node functionality with TUN.
 func TestDockerExitNode(t *testing.T) {
 	if os.Getenv("PULSE_DOCKER_TEST") == "" {

@@ -21,7 +21,7 @@ func NodeFlags(fs *flag.FlagSet) (
 	caEnabled *bool, caToken *string,
 	socksEnabled *bool, socksListen *string,
 	dnsEnabled *bool, dnsListen *string,
-	tunEnabled *bool,
+	tunEnabled *bool, fecEnabled *bool,
 	scribeEnabled *bool, scribeListen *string,
 	exitEnabled *bool,
 ) {
@@ -40,6 +40,7 @@ func NodeFlags(fs *flag.FlagSet) (
 	dnsEnabled = fs.Bool("dns", false, "enable DNS server for .pulse")
 	dnsListen = fs.String("dns-listen", "", "DNS listen address (default 127.0.0.1:5353)")
 	tunEnabled = fs.Bool("tun", false, "enable TUN interface (Linux only)")
+	fecEnabled = fs.Bool("fec", false, "enable FEC on TUN pipes (lossy links)")
 	scribeEnabled = fs.Bool("scribe", false, "enable scribe (control plane)")
 	scribeListen = fs.String("scribe-listen", "", "scribe HTTP API address (default 127.0.0.1:8080)")
 	exitEnabled = fs.Bool("exit", false, "enable exit node")
@@ -52,7 +53,7 @@ func ApplyFlags(cfg *config.Config,
 	caEnabled bool, caToken string,
 	socksEnabled bool, socksListen string,
 	dnsEnabled bool, dnsListen string,
-	tunEnabled bool,
+	tunEnabled bool, fecEnabled bool,
 	scribeEnabled bool, scribeListen string,
 	exitEnabled bool,
 ) {
@@ -105,6 +106,9 @@ func ApplyFlags(cfg *config.Config,
 	if tunEnabled {
 		cfg.Tun.Enabled = true
 	}
+	if fecEnabled {
+		cfg.Tun.FEC = true
+	}
 	if scribeEnabled {
 		cfg.Scribe.Enabled = true
 	}
@@ -123,7 +127,7 @@ func RunNode(args []string) {
 		caEnabled, caToken,
 		socksEnabled, socksListen,
 		dnsEnabled, dnsListen,
-		tunEnabled,
+		tunEnabled, fecEnabled,
 		scribeEnabled, scribeListen,
 		exitEnabled := NodeFlags(fs)
 	logLevelFlag := fs.String("log-level", "", "log level: debug, info, warn, error (default: info)")
@@ -135,7 +139,7 @@ func RunNode(args []string) {
 	}
 	ApplyFlags(cfg, *wsAddr, *listenAddr, *tcpAddr, *dataDir, *networkID, *joinAddr, *joinToken,
 		*caEnabled, *caToken, *socksEnabled, *socksListen,
-		*dnsEnabled, *dnsListen, *tunEnabled, *scribeEnabled, *scribeListen, *exitEnabled)
+		*dnsEnabled, *dnsListen, *tunEnabled, *fecEnabled, *scribeEnabled, *scribeListen, *exitEnabled)
 
 	ll := *logLevelFlag
 	if ll == "" {
