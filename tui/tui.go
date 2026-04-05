@@ -23,10 +23,11 @@ type App struct {
 	bottomBar *tview.TextView
 
 	// Views
-	nodesTable *tview.Table
-	dnsTable   *tview.Table
-	routeTable *tview.Table
-	aclTable   *tview.Table
+	nodesTable     *tview.Table
+	dnsTable       *tview.Table
+	routeTable     *tview.Table
+	aclTable       *tview.Table
+	dashboardTable *tview.Table
 
 	// State
 	selfID    string
@@ -71,13 +72,15 @@ func (a *App) Run() error {
 	a.dnsTable = a.makeTable()
 	a.routeTable = a.makeTable()
 	a.aclTable = a.makeTable()
+	a.dashboardTable = a.makeTable()
 
 	// Pages
 	a.pages = tview.NewPages().
 		AddPage("nodes", a.nodesTable, true, true).
 		AddPage("dns", a.dnsTable, true, false).
 		AddPage("routes", a.routeTable, true, false).
-		AddPage("acls", a.aclTable, true, false)
+		AddPage("acls", a.aclTable, true, false).
+		AddPage("dashboard", a.dashboardTable, true, false)
 
 	// Layout
 	layout := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -99,6 +102,9 @@ func (a *App) Run() error {
 			return nil
 		case '4':
 			a.switchPage("acls")
+			return nil
+		case '5':
+			a.switchPage("dashboard")
 			return nil
 		case 'q':
 			a.app.Stop()
@@ -163,6 +169,8 @@ func (a *App) renderCurrentPage() {
 		a.renderRoutes()
 	case "acls":
 		a.renderACLs()
+	case "dashboard":
+		a.renderDashboard()
 	}
 	a.renderTopBar(page)
 	a.renderBottomBar(page)
@@ -236,7 +244,7 @@ func (a *App) renderTopBar(page string) {
 	}
 
 	tabs := []struct{ key, name string }{
-		{"1", "Nodes"}, {"2", "DNS"}, {"3", "Routes"}, {"4", "ACLs"},
+		{"1", "Nodes"}, {"2", "DNS"}, {"3", "Routes"}, {"4", "ACLs"}, {"5", "Dashboard"},
 	}
 	var tabStr string
 	for _, t := range tabs {
@@ -278,6 +286,8 @@ func (a *App) renderBottomBar(page string) {
 		} else {
 			a.bottomBar.SetText(" [yellow]q[white]:quit  [dim](read-only: not the scribe)")
 		}
+	case "dashboard":
+		a.bottomBar.SetText(" [yellow]q[white]:quit  [dim](live sparklines — auto-refreshing)")
 	}
 }
 

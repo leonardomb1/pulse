@@ -16,7 +16,7 @@ func TestApplyFlagsDataDir(t *testing.T) {
 		false, "",
 		false, false,
 		false, "",
-		false,
+		false, "",
 	)
 
 	if cfg.Node.DataDir != "/tmp/test-pulse" {
@@ -43,7 +43,7 @@ func TestApplyFlagsFeatures(t *testing.T) {
 		true, "127.0.0.1:5454",
 		true, false,
 		true, "0.0.0.0:9090",
-		true,
+		true, "10.0.0.0/8,192.168.0.0/16",
 	)
 
 	if cfg.Node.Addr != "relay:443" {
@@ -79,6 +79,9 @@ func TestApplyFlagsFeatures(t *testing.T) {
 	if !cfg.Exit.Enabled {
 		t.Error("Exit should be enabled")
 	}
+	if len(cfg.Exit.CIDRs) != 2 || cfg.Exit.CIDRs[0] != "10.0.0.0/8" || cfg.Exit.CIDRs[1] != "192.168.0.0/16" {
+		t.Errorf("Exit.CIDRs = %v, want [10.0.0.0/8 192.168.0.0/16]", cfg.Exit.CIDRs)
+	}
 }
 
 func TestApplyFlagsCATokenFallback(t *testing.T) {
@@ -92,7 +95,7 @@ func TestApplyFlagsCATokenFallback(t *testing.T) {
 		false, "",
 		false, false,
 		false, "",
-		false,
+		false, "",
 	)
 
 	if cfg.CA.JoinToken != "shared-token" {
@@ -112,7 +115,7 @@ func TestApplyFlagsNoOverrideDefaults(t *testing.T) {
 		false, "",
 		false, false,
 		false, "",
-		false,
+		false, "",
 	)
 
 	if cfg.Node.Addr != origAddr {

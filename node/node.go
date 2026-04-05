@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -79,6 +80,8 @@ type Node struct {
 	netCfg     netConfigStore
 	shutdown   chan struct{} // closed by Stop() to trigger graceful shutdown
 	traffic    TrafficCounters
+	events     *EventLog
+	statsRing  *StatsRing
 
 	// Delta-gossip: track last-sent table version per peer.
 	gossipVersionsMu sync.Mutex
@@ -131,6 +134,12 @@ func New(cfg *config.Config, ca *CA) (*Node, error) {
 		}
 	}
 
+	eventsPath := filepath.Join(cfg.Node.DataDir, "events.log")
+	events, err := OpenEventLog(eventsPath)
+	if err != nil {
+		Warnf("event log: %v — events will not be persisted", err)
+	}
+
 	n := &Node{
 		id:             identity.NodeID,
 		cfg:            cfg,
@@ -144,6 +153,17 @@ func New(cfg *config.Config, ca *CA) (*Node, error) {
 		exitRoutes:     exitRoutes,
 		shutdown:       make(chan struct{}),
 		gossipVersions: make(map[string]uint64),
+		events:         events,
+		statsRing:      NewStatsRing(),
+	}
+
+	// Load cumulative stats from previous runs.
+	statsPath := filepath.Join(cfg.Node.DataDir, "stats.json")
+	_ = n.statsRing.LoadCumulative(statsPath)
+
+	// Wire event log into CA for audit events.
+	if ca != nil && events != nil {
+		ca.Events = events
 	}
 
 	// Build the complete self-entry in one shot and force-write it.
@@ -176,7 +196,16 @@ func New(cfg *config.Config, ca *CA) (*Node, error) {
 	// DNS server gets a callback to serve NetworkConfig zones.
 	n.dns = NewDNSServer(cfg.DNS.Listen, table, func() []DNSZone { return n.netCfg.dnsZones() })
 	n.socks = NewSOCKSServer(cfg.SOCKS.Listen, router, table, exitRoutes, identity.NodeID, func() []DNSZone { return n.netCfg.dnsZones() }, &n.traffic)
+	n.prober.OnLinkDead = func(nodeID string) {
+		n.emitEvent(EventEntry{Type: EventLinkDown, NodeID: nodeID, Detail: "dead link detected by prober"})
+	}
+
 	n.nat = NewNATManager(identity.NodeID, table, registry, router, n.clientTLSConfig(), n.onPeerSession)
+	n.nat.onEvent = n.emitEvent
+
+	table.OnPrune = func(nodeID string) {
+		n.emitEvent(EventEntry{Type: EventLinkDown, NodeID: nodeID, Detail: "stale peer pruned"})
+	}
 
 	if isScribe {
 		n.scribe = NewScribe(n)
@@ -225,6 +254,24 @@ func (n *Node) Run(ctx context.Context) error {
 				}
 			}
 		}
+	}
+
+	n.emitEvent(EventEntry{Type: EventStartup, Detail: fmt.Sprintf("node %s starting", n.id)})
+
+	// Flush event log periodically.
+	if n.events != nil {
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					n.events.Flush()
+				}
+			}
+		}()
 	}
 
 	go n.serveWS(ctx)
@@ -306,6 +353,11 @@ func (n *Node) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	case <-n.shutdown:
 	}
+	n.emitEvent(EventEntry{Type: EventShutdown, Detail: "node stopping"})
+	if n.events != nil {
+		_ = n.events.Close()
+	}
+	_ = n.statsRing.SaveCumulative(filepath.Join(n.cfg.Node.DataDir, "stats.json"))
 	return nil
 }
 
@@ -315,6 +367,37 @@ func (n *Node) Stop() {
 	case <-n.shutdown:
 	default:
 		close(n.shutdown)
+	}
+}
+
+// sampleStats records a snapshot of per-peer metrics into the ring buffer.
+func (n *Node) sampleStats() {
+	now := time.Now()
+	for _, entry := range n.table.Snapshot() {
+		if entry.NodeID == n.id {
+			continue
+		}
+		snap := StatsSnapshot{
+			Timestamp: now,
+			LatencyMS: entry.LatencyMS,
+			LossRate:  entry.LossRate,
+		}
+		if n.scribe != nil {
+			stats := n.scribe.Stats()
+			if st, ok := stats[entry.NodeID]; ok {
+				snap.BytesIn = st.BytesIn
+				snap.BytesOut = st.BytesOut
+				snap.ActiveConns = int(st.ActiveConns)
+			}
+		}
+		n.statsRing.Record(entry.NodeID, snap)
+	}
+}
+
+// emitEvent writes an event to the event log if available.
+func (n *Node) emitEvent(e EventEntry) {
+	if n.events != nil {
+		n.events.Emit(e)
 	}
 }
 
@@ -405,6 +488,7 @@ func (n *Node) gossipLoop(ctx context.Context) {
 		case <-ticker.C:
 			n.pushGossip()
 			n.pushStatsToScribe()
+			n.sampleStats()
 		}
 	}
 }

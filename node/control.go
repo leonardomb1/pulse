@@ -116,6 +116,9 @@ type ctrlRequest struct {
 	MaxUses int    `json:"max_uses,omitempty"`
 	// token-revoke
 	TokenPrefix string `json:"token_prefix,omitempty"`
+	// events filter
+	EventType string `json:"event_type,omitempty"`
+	Since     string `json:"since,omitempty"`
 }
 
 type ctrlResponse struct {
@@ -170,6 +173,13 @@ func (s *ControlServer) handle(conn net.Conn) {
 		s.cmdTokenList(conn)
 	case "token-revoke":
 		s.cmdTokenRevoke(conn, req.TokenPrefix)
+	case "peer-stats":
+		s.cmdPeerStats(conn, req.NodeID)
+	case "events":
+		s.cmdEvents(conn, req)
+	case "logs":
+		s.cmdLogs(conn)
+		return // cmdLogs takes ownership of conn
 	case "stop":
 		s.write(conn, ctrlResponse{OK: true})
 		s.node.Stop()
@@ -194,7 +204,7 @@ func (s *ControlServer) cmdStatus(conn net.Conn) {
 		if link, ok := s.node.registry.Get(peers[i].NodeID); ok && !link.IsClosed() {
 			switch {
 			case link.ViaNAT:
-				peers[i].LinkType = "nat"
+				peers[i].LinkType = "direct_quic"
 			case link.Transport() == "quic":
 				peers[i].LinkType = "quic"
 			default:
@@ -418,6 +428,57 @@ func (s *ControlServer) cmdNameSet(conn net.Conn, nodeID, name string) {
 	}
 	s.node.scribe.SetName(nodeID, name)
 	s.write(conn, ctrlResponse{OK: true})
+}
+
+func (s *ControlServer) cmdPeerStats(conn net.Conn, nodeID string) {
+	if nodeID != "" {
+		snaps := s.node.statsRing.Get(nodeID)
+		s.write(conn, map[string]interface{}{"node_id": nodeID, "snapshots": snaps})
+		return
+	}
+	s.write(conn, map[string]interface{}{"latest": s.node.statsRing.AllLatest()})
+}
+
+func (s *ControlServer) cmdEvents(conn net.Conn, req ctrlRequest) {
+	if s.node.events == nil {
+		s.write(conn, ctrlResponse{Error: "event log not available"})
+		return
+	}
+	opts := FilterOpts{
+		Type: EventType(req.EventType),
+		Node: req.NodeID,
+	}
+	if req.Since != "" {
+		t, err := time.Parse(time.RFC3339, req.Since)
+		if err != nil {
+			s.write(conn, ctrlResponse{Error: "invalid since: " + err.Error()})
+			return
+		}
+		opts.Since = t
+	}
+	events, err := ReadFiltered(s.node.events.path, opts)
+	if err != nil {
+		s.write(conn, ctrlResponse{Error: err.Error()})
+		return
+	}
+	s.write(conn, map[string]interface{}{"events": events})
+}
+
+func (s *ControlServer) cmdLogs(conn net.Conn) {
+	if s.node.events == nil {
+		s.write(conn, ctrlResponse{Error: "event log not available"})
+		conn.Close()
+		return
+	}
+	ch := s.node.events.Subscribe()
+	defer s.node.events.Unsubscribe(ch)
+
+	enc := json.NewEncoder(conn)
+	for e := range ch {
+		if err := enc.Encode(e); err != nil {
+			return // client disconnected
+		}
+	}
 }
 
 func (s *ControlServer) write(conn net.Conn, v interface{}) {

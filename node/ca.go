@@ -25,7 +25,7 @@ type CA struct {
 	CertPEM   []byte
 	Pool      *x509.CertPool
 	JoinToken string    // legacy master token (fallback)
-	Audit     *AuditLog // nil if audit logging not configured
+	Events    *EventLog // event log for CA operations (set by node)
 
 	revokedMu  sync.RWMutex
 	revokedIDs map[string]struct{}
@@ -149,29 +149,29 @@ func (ca *CA) HandleJoin(req JoinRequest) JoinResponse {
 	nodePubKey := ed25519.PublicKey(req.PublicKey)
 	nodeID := nodeIDFromKey(nodePubKey)
 
-	ca.audit(AuditEntry{Op: AuditJoinAttempted, NodeID: nodeID})
+	ca.audit(EventEntry{Type: EventJoinAttempted, NodeID: nodeID})
 
 	if ca.IsRevoked(nodeID) {
 		resp := JoinResponse{Error: "node has been revoked"}
-		ca.audit(AuditEntry{Op: AuditJoinFailed, NodeID: nodeID, Error: resp.Error})
+		ca.audit(EventEntry{Type: EventJoinFailed, NodeID: nodeID, Error: resp.Error})
 		return resp
 	}
 
 	matchedToken, err := ca.validateToken(req.Token)
 	if err != nil {
 		resp := JoinResponse{Error: "invalid join token"}
-		ca.audit(AuditEntry{Op: AuditJoinFailed, NodeID: nodeID, Error: resp.Error})
+		ca.audit(EventEntry{Type: EventJoinFailed, NodeID: nodeID, Error: resp.Error})
 		return resp
 	}
 
 	signedDER, err := ca.signNodeCert(nodePubKey, nodeID)
 	if err != nil {
 		resp := JoinResponse{Error: fmt.Sprintf("signing failed: %v", err)}
-		ca.audit(AuditEntry{Op: AuditJoinFailed, NodeID: nodeID, Error: resp.Error})
+		ca.audit(EventEntry{Type: EventJoinFailed, NodeID: nodeID, Error: resp.Error})
 		return resp
 	}
 
-	ca.audit(AuditEntry{Op: AuditCertIssued, NodeID: nodeID})
+	ca.audit(EventEntry{Type: EventCertIssued, NodeID: nodeID})
 
 	// Notify scribe of token usage for use-count tracking.
 	if matchedToken != "" && ca.OnTokenUsed != nil {
@@ -195,7 +195,7 @@ func (ca *CA) RevokeNode(nodeID string) {
 	}
 	ca.revokedIDs[nodeID] = struct{}{}
 	ca.revokedMu.Unlock()
-	ca.audit(AuditEntry{Op: AuditCertRevoked, NodeID: nodeID})
+	ca.audit(EventEntry{Type: EventCertRevoked, NodeID: nodeID})
 }
 
 // IsRevoked reports whether nodeID has been revoked.
@@ -250,9 +250,9 @@ func (ca *CA) SyncRevokedIDs(ids []string) {
 	}
 }
 
-func (ca *CA) audit(e AuditEntry) {
-	if ca.Audit != nil {
-		_ = ca.Audit.Write(e)
+func (ca *CA) audit(e EventEntry) {
+	if ca.Events != nil {
+		ca.Events.Emit(e)
 	}
 }
 

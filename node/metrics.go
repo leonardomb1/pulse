@@ -77,7 +77,7 @@ func (s *Scribe) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&b, "pulse_peer_hop_count{%s} %d\n", labels, p.HopCount)
 	}
 
-	// Per-peer link type: "nat", "quic", "websocket", or "none".
+	// Per-peer link type: "direct_quic", "quic", "websocket", or "none".
 	fmt.Fprintf(&b, "# HELP pulse_peer_link_type Active link type to peer (label).\n")
 	fmt.Fprintf(&b, "# TYPE pulse_peer_link_type gauge\n")
 	for _, p := range peers {
@@ -92,7 +92,7 @@ func (s *Scribe) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		if link, ok := s.node.registry.Get(p.NodeID); ok && !link.IsClosed() {
 			switch {
 			case link.ViaNAT:
-				linkType = "nat"
+				linkType = "direct_quic"
 			case link.Transport() == "quic":
 				linkType = "quic"
 			default:

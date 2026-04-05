@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"crypto/x509"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -116,6 +118,82 @@ func RunStatus(args []string) {
 			p.NodeID, name, p.Addr, meshIP, linkType, latency, loss, p.HopCount, roles, tags, lastSeen)
 	}
 	tw.Flush()
+}
+
+func RunStats(args []string) {
+	sock := SocketPath(args)
+	cmd := map[string]interface{}{"cmd": "peer-stats"}
+	// If a node ID is provided as positional arg, filter to that node.
+	fs := flag.NewFlagSet("stats", flag.ExitOnError)
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		cmd["node_id"] = fs.Arg(0)
+	}
+	resp, err := CtrlDo(sock, cmd)
+	if err != nil {
+		log.Fatal(err)
+	}
+	b, _ := json.MarshalIndent(json.RawMessage(resp["snapshots"]), "", "  ")
+	if b != nil && string(b) != "null" {
+		fmt.Println(string(b))
+		return
+	}
+	b, _ = json.MarshalIndent(json.RawMessage(resp["latest"]), "", "  ")
+	fmt.Println(string(b))
+}
+
+func RunEvents(args []string) {
+	fs := flag.NewFlagSet("events", flag.ExitOnError)
+	sock := fs.String("socket", "", "control socket path")
+	configPath := fs.String("config", "", "path to config.toml")
+	eventType := fs.String("type", "", "filter by event type")
+	nodeFilter := fs.String("node", "", "filter by node ID")
+	since := fs.String("since", "", "show events since (RFC3339 or duration like 1h)")
+	_ = fs.Parse(args)
+
+	path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
+	cmd := map[string]interface{}{"cmd": "events"}
+	if *eventType != "" {
+		cmd["event_type"] = *eventType
+	}
+	if *nodeFilter != "" {
+		cmd["node_id"] = *nodeFilter
+	}
+	if *since != "" {
+		// Try parsing as duration first (e.g. "1h"), then as RFC3339.
+		if d, err := time.ParseDuration(*since); err == nil {
+			cmd["since"] = time.Now().Add(-d).Format(time.RFC3339)
+		} else {
+			cmd["since"] = *since
+		}
+	}
+	resp, err := CtrlDo(path, cmd)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var events []node.EventEntry
+	_ = json.Unmarshal(resp["events"], &events)
+	for _, e := range events {
+		line, _ := json.Marshal(e)
+		fmt.Println(string(line))
+	}
+}
+
+func RunLogs(args []string) {
+	sock := SocketPath(args)
+	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
+	if err != nil {
+		log.Fatalf("connect to daemon: %v", err)
+	}
+	defer conn.Close()
+
+	cmd, _ := json.Marshal(map[string]string{"cmd": "logs"})
+	_, _ = conn.Write(append(cmd, '\n'))
+
+	sc := bufio.NewScanner(conn)
+	for sc.Scan() {
+		fmt.Println(sc.Text())
+	}
 }
 
 func RunID(args []string) {
@@ -695,27 +773,28 @@ func RunCALog(args []string) {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	auditPath := filepath.Join(cfg.CA.DataDir, "audit.log")
-	al, err := node.OpenAuditLog(auditPath)
-	if err != nil {
-		log.Fatalf("open audit log %s: %v", auditPath, err)
-	}
-	var entries []node.AuditEntry
-	if *nodeFilter != "" {
-		entries, err = al.ReadByNode(*nodeFilter)
-	} else if *sinceStr != "" {
+	eventsPath := filepath.Join(cfg.Node.DataDir, "events.log")
+	opts := node.FilterOpts{Node: *nodeFilter}
+	if *sinceStr != "" {
 		t, parseErr := time.Parse(time.RFC3339, *sinceStr)
 		if parseErr != nil {
 			log.Fatalf("invalid --since time: %v", parseErr)
 		}
-		entries, err = al.ReadSince(t)
-	} else {
-		entries, err = al.ReadAll()
+		opts.Since = t
 	}
+	entries, err := node.ReadFiltered(eventsPath, opts)
 	if err != nil {
-		log.Fatalf("read audit log: %v", err)
+		log.Fatalf("read event log %s: %v", eventsPath, err)
+	}
+	// Show only CA-related events.
+	caTypes := map[node.EventType]bool{
+		node.EventJoinAttempted: true, node.EventCertIssued: true,
+		node.EventJoinFailed: true, node.EventCertRevoked: true,
 	}
 	for _, e := range entries {
+		if !caTypes[e.Type] {
+			continue
+		}
 		line, _ := json.Marshal(e)
 		fmt.Println(string(line))
 	}

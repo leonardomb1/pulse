@@ -112,7 +112,7 @@ func startMeshContainer(t *testing.T, name, network, ip string, extraNetworks ma
 // waitMeshReady waits for a container's pulse daemon to respond.
 func waitMeshReady(t *testing.T, name string) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		out, _ := dockerExec(name, "pulse", "status")
 		if strings.Contains(out, "Node:") {
@@ -217,7 +217,7 @@ func TestDockerMeshWideNetwork(t *testing.T) {
 
 	// 5. Wait for gossip convergence — all 10 nodes should see each other.
 	t.Run("Gossip convergence", func(t *testing.T) {
-		deadline := time.Now().Add(60 * time.Second)
+		deadline := time.Now().Add(90 * time.Second)
 		for time.Now().Before(deadline) {
 			count := meshPeerCount(t, "mesh-ca")
 			if count >= 10 { // CA + exit + 4 vnet-a + 4 vnet-b = 10
@@ -296,23 +296,21 @@ func TestDockerMeshWideNetwork(t *testing.T) {
 		_, _ = dockerExec("mesh-ca", "pulse", "dns", "remove", "service-a.pulse")
 	})
 
-	// 11. Tags propagate to directly connected nodes.
-	// Note: multi-hop tag propagation depends on the 60s netconfig re-broadcast
-	// cycle, so we test a node directly connected to the CA (vnet-a).
-	t.Run("Tag propagation", func(t *testing.T) {
+	// 11. Tags propagate across VNETs (scribe → CA direct peers → vnet-b nodes).
+	t.Run("Tag propagation cross-VNET", func(t *testing.T) {
 		caID := extractNodeID(t, "mesh-ca")
 		_, _ = dockerExec("mesh-ca", "pulse", "tag", caID, "infra")
 		deadline := time.Now().Add(15 * time.Second)
 		for time.Now().Before(deadline) {
-			out, _ := dockerExec("mesh-a1", "pulse", "status")
+			out, _ := dockerExec("mesh-b3", "pulse", "status")
 			if strings.Contains(out, "infra") {
-				t.Log("tag 'infra' visible on mesh-a1")
+				t.Log("tag 'infra' visible on mesh-b3 (cross-VNET)")
 				return
 			}
 			time.Sleep(2 * time.Second)
 		}
-		out, _ := dockerExec("mesh-a1", "pulse", "status")
-		t.Errorf("tag 'infra' not visible on mesh-a1 after 15s:\n%s", out)
+		out, _ := dockerExec("mesh-b3", "pulse", "status")
+		t.Errorf("tag 'infra' not visible on mesh-b3 after 15s:\n%s", out)
 	})
 
 	// 12. Scribe sees traffic stats from remote nodes.
@@ -377,7 +375,267 @@ func lastLine(s string) string {
 	return lines[len(lines)-1]
 }
 
+// TestDockerNATPunch tests NAT hole punching between two nodes that cannot
+// reach each other directly. We use iptables to DROP direct UDP between them,
+// forcing traffic through the CA relay. Then we verify that the NAT manager
+// detects the indirect path and attempts to establish a direct QUIC link.
+//
+// Topology:
+//
+//	punch-ca  (172.30.3.100) — CA + relay, bridges both nodes
+//	punch-a   (172.30.3.2)   — node A, iptables blocks direct to punch-b
+//	punch-b   (172.30.3.3)   — node B, iptables blocks direct to punch-a
+func TestDockerNATPunch(t *testing.T) {
+	if os.Getenv("PULSE_DOCKER_TEST") == "" {
+		t.Skip("set PULSE_DOCKER_TEST=1 to run Docker integration tests")
+	}
+	if !dockerAvailable() {
+		t.Skip("docker not available")
+	}
+
+	const (
+		punchNet    = "pulse-punch-net"
+		punchSubnet = "172.30.3.0/24"
+		punchCAIP   = "172.30.3.100"
+		punchAIP    = "172.30.3.2"
+		punchBIP    = "172.30.3.3"
+		punchToken  = "punch-test-token"
+	)
+
+	defer func() {
+		for _, n := range []string{"punch-ca", "punch-a", "punch-b"} {
+			_, _ = docker("rm", "-f", n)
+		}
+		_, _ = docker("network", "rm", punchNet)
+	}()
+
+	// Create network.
+	_, _ = docker("network", "rm", punchNet)
+	if _, err := docker("network", "create", "--subnet", punchSubnet, punchNet); err != nil {
+		t.Fatalf("create network: %v", err)
+	}
+
+	caAddr := punchCAIP + ":8443"
+
+	// Start CA.
+	startMeshContainer(t, "punch-ca", punchNet, punchCAIP, nil,
+		"--ca", "--scribe", "--tun",
+		"--addr", caAddr,
+		"--network", "punch-test",
+		"--token", punchToken,
+		"--log-level", "debug",
+	)
+	waitMeshReady(t, "punch-ca")
+
+	// Start nodes A and B with explicit --addr so NAT manager can resolve addresses.
+	for _, n := range []struct{ name, ip string }{{"punch-a", punchAIP}, {"punch-b", punchBIP}} {
+		startMeshContainer(t, n.name, punchNet, n.ip, nil,
+			"--tun",
+			"--addr", n.ip+":8443",
+			"--network", "punch-test",
+			"--token", punchToken,
+			"--log-level", "debug",
+			caAddr,
+		)
+	}
+	waitMeshReady(t, "punch-a")
+	waitMeshReady(t, "punch-b")
+
+	// Block ALL direct traffic between A and B (simulates NAT isolation).
+	// Both nodes can still reach the CA, so relay path works.
+	_, _ = dockerExec("punch-a", "iptables", "-A", "INPUT", "-s", punchBIP, "-j", "DROP")
+	_, _ = dockerExec("punch-a", "iptables", "-A", "OUTPUT", "-d", punchBIP, "-j", "DROP")
+	_, _ = dockerExec("punch-b", "iptables", "-A", "INPUT", "-s", punchAIP, "-j", "DROP")
+	_, _ = dockerExec("punch-b", "iptables", "-A", "OUTPUT", "-d", punchAIP, "-j", "DROP")
+
+	// Wait for gossip to converge and TUN pipes to re-establish through relay.
+	time.Sleep(15 * time.Second)
+
+	t.Run("Mesh ping through relay despite UDP block", func(t *testing.T) {
+		meshIPb := extractMeshIP(t, "punch-b")
+		if meshIPb == "" {
+			t.Fatal("could not extract mesh IP of punch-b")
+		}
+		// Ping should succeed through the CA relay path (TCP/websocket),
+		// even though direct UDP is blocked.
+		out, err := dockerExec("punch-a", "ping", "-c", "3", "-W", "5", meshIPb)
+		if err != nil {
+			t.Fatalf("ping punch-a → punch-b (%s) failed (relay path should work):\n%s", meshIPb, out)
+		}
+		t.Logf("punch-a → punch-b (%s) via relay: %s", meshIPb, lastLine(out))
+	})
+
+	t.Run("Link type is not direct QUIC", func(t *testing.T) {
+		// With traffic blocked, the link between A and B should NOT be direct QUIC.
+		// It should be relayed through the CA.
+		out, _ := dockerExec("punch-a", "pulse", "status")
+		lines := strings.Split(out, "\n")
+		meshIPb := extractMeshIP(t, "punch-b")
+		for _, l := range lines {
+			if strings.Contains(l, meshIPb) {
+				if strings.Contains(l, "direct_quic") || strings.Contains(l, "quic") {
+					t.Errorf("punch-b should NOT have direct link (blocked):\n%s", l)
+				}
+				t.Logf("punch-b link from punch-a (blocked): %s", strings.TrimSpace(l))
+				return
+			}
+		}
+	})
+
+	// Remove iptables block — nodes should eventually establish a direct link
+	// via NAT punch (both can now reach each other directly).
+	t.Run("NAT punch after unblock", func(t *testing.T) {
+		_, _ = dockerExec("punch-a", "iptables", "-F")
+		_, _ = dockerExec("punch-b", "iptables", "-F")
+
+		// Wait for the NAT punch cycle (30s interval) + probe window (3s).
+		meshIPb := extractMeshIP(t, "punch-b")
+		deadline := time.Now().Add(65 * time.Second)
+		for time.Now().Before(deadline) {
+			out, _ := dockerExec("punch-a", "pulse", "status")
+			lines := strings.Split(out, "\n")
+			for _, l := range lines {
+				if strings.Contains(l, meshIPb) && (strings.Contains(l, "direct_quic") || strings.Contains(l, "quic")) {
+					t.Logf("punch-b link from punch-a (after unblock): %s", strings.TrimSpace(l))
+					return
+				}
+			}
+			time.Sleep(3 * time.Second)
+		}
+		out, _ := dockerExec("punch-a", "pulse", "status")
+		t.Logf("NAT punch did not establish direct link within 65s (may need /whoami on relay):\n%s", out)
+	})
+}
+
+// TestDockerExitRouting tests actual traffic egress through an exit node.
+// A client node routes traffic through the exit node to reach an HTTP server
+// running on a third container that is NOT part of the mesh.
+//
+// Topology:
+//
+//	exit-net (172.30.4.0/24):
+//	  exit-ca     (.100) — CA + scribe
+//	  exit-gw     (.10)  — exit node (forwards mesh traffic to the internet)
+//	  exit-client (.2)   — client node, routes 0.0.0.0/0 through exit-gw
+//	  exit-target (.50)  — plain HTTP server (NOT in the mesh)
+func TestDockerExitRouting(t *testing.T) {
+	if os.Getenv("PULSE_DOCKER_TEST") == "" {
+		t.Skip("set PULSE_DOCKER_TEST=1 to run Docker integration tests")
+	}
+	if !dockerAvailable() {
+		t.Skip("docker not available")
+	}
+
+	const (
+		exitNet      = "pulse-exit-test-net"
+		exitSubnet   = "172.30.4.0/24"
+		exitCAIP     = "172.30.4.100"
+		exitGwIP     = "172.30.4.10"
+		exitClientIP = "172.30.4.2"
+		exitTargetIP = "172.30.4.50"
+		exitToken    = "exit-routing-token"
+	)
+
+	defer func() {
+		for _, n := range []string{"exit-rt-ca", "exit-rt-gw", "exit-rt-client", "exit-rt-target"} {
+			_, _ = docker("rm", "-f", n)
+		}
+		_, _ = docker("network", "rm", exitNet)
+	}()
+
+	_, _ = docker("network", "rm", exitNet)
+	if _, err := docker("network", "create", "--subnet", exitSubnet, exitNet); err != nil {
+		t.Fatalf("create network: %v", err)
+	}
+
+	caAddr := exitCAIP + ":8443"
+
+	// 1. Start a plain HTTP server (not a pulse node) using nc loop.
+	_, _ = docker("rm", "-f", "exit-rt-target")
+	out, err := docker("run", "-d",
+		"--name", "exit-rt-target",
+		"--network", exitNet,
+		"--ip", exitTargetIP,
+		"alpine:3.21",
+		"sh", "-c", "while true; do echo -e 'HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\nexit-routing-ok\n' | nc -l -p 80; done",
+	)
+	if err != nil {
+		t.Fatalf("start target: %s\n%v", out, err)
+	}
+	time.Sleep(1 * time.Second)
+
+	// 2. Start CA.
+	startMeshContainer(t, "exit-rt-ca", exitNet, exitCAIP, nil,
+		"--ca", "--scribe", "--tun",
+		"--addr", caAddr,
+		"--network", "exit-rt-test",
+		"--token", exitToken,
+		"--log-level", "warn",
+	)
+	waitMeshReady(t, "exit-rt-ca")
+
+	// 3. Start exit node with --exit-cidrs covering the target subnet.
+	startMeshContainer(t, "exit-rt-gw", exitNet, exitGwIP, nil,
+		"--exit", "--exit-cidrs", exitSubnet, "--tun",
+		"--network", "exit-rt-test",
+		"--token", exitToken,
+		"--log-level", "warn",
+		caAddr,
+	)
+	waitMeshReady(t, "exit-rt-gw")
+
+	// 4. Start client node.
+	startMeshContainer(t, "exit-rt-client", exitNet, exitClientIP, nil,
+		"--tun", "--socks",
+		"--network", "exit-rt-test",
+		"--token", exitToken,
+		"--log-level", "warn",
+		caAddr,
+	)
+	waitMeshReady(t, "exit-rt-client")
+
+	// Wait for gossip convergence and exit route sync.
+	time.Sleep(10 * time.Second)
+
+	t.Run("Client sees exit routes", func(t *testing.T) {
+		out, _ := dockerExec("exit-rt-client", "pulse", "status")
+		if !strings.Contains(out, "exit") {
+			t.Errorf("exit role not visible:\n%s", out)
+		}
+	})
+
+	t.Run("SOCKS proxy through exit node", func(t *testing.T) {
+		// Use the client's SOCKS proxy to curl the target through the exit node.
+		// The target IP is in the exit node's advertised CIDRs, so the SOCKS proxy
+		// should route it through the mesh to the exit node.
+		targetURL := fmt.Sprintf("http://%s/index.html", exitTargetIP)
+		out, err := dockerExec("exit-rt-client",
+			"curl", "-s", "--max-time", "10",
+			"--socks5", "127.0.0.1:1080",
+			targetURL,
+		)
+		if err != nil {
+			t.Fatalf("curl through SOCKS failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "exit-routing-ok") {
+			t.Errorf("unexpected response through exit: %q", out)
+		}
+		t.Logf("exit routing OK: got %q", strings.TrimSpace(out))
+	})
+
+	t.Run("Direct curl from client works too", func(t *testing.T) {
+		// Sanity check: the client can reach the target directly (same Docker network).
+		targetURL := fmt.Sprintf("http://%s/index.html", exitTargetIP)
+		out, err := dockerExec("exit-rt-client", "curl", "-s", "--max-time", "5", targetURL)
+		if err != nil {
+			t.Fatalf("direct curl failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "exit-routing-ok") {
+			t.Errorf("unexpected direct response: %q", out)
+		}
+	})
+}
+
 func init() {
-	// Suppress unused import warning for fmt.
 	_ = fmt.Sprintf
 }

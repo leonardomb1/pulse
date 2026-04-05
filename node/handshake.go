@@ -282,6 +282,7 @@ func (n *Node) handleHandshake(msg streamMsg, ac *authedConn) {
 	if ac.session != nil {
 		n.registry.Add(newPeerLink(nodeID, ac.session))
 		Infof("handshake: registered link to %s", nodeID)
+		n.emitEvent(EventEntry{Type: EventLinkUp, NodeID: nodeID, Detail: ac.session.Transport()})
 	}
 
 	// If we're the scribe, immediately push the current NetworkConfig to the

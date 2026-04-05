@@ -37,6 +37,7 @@ func (n *Node) checkCertRenewal() {
 		return
 	}
 	Infof("cert: %s remaining — initiating renewal", remaining.Round(time.Hour))
+	n.emitEvent(EventEntry{Type: EventCertExpiryWarning, Detail: remaining.Round(time.Hour).String()})
 	if err := n.renewCert(); err != nil {
 		Warnf("cert: renewal failed: %v", err)
 	}
@@ -55,6 +56,7 @@ func (n *Node) renewCert() error {
 		return err
 	}
 	Infof("cert: renewed successfully")
+	n.emitEvent(EventEntry{Type: EventCertRenew})
 	return n.ReloadIdentity()
 }
 

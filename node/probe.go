@@ -115,10 +115,30 @@ func (s *LinkStats) LossRate() float64 {
 	return float64(losses) / float64(limit)
 }
 
+// consecutiveFailures returns the number of trailing failures in the window.
+func (s *LinkStats) consecutiveFailures() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	limit := probeWindowLen
+	if !s.filled {
+		limit = s.idx
+	}
+	count := 0
+	for i := limit - 1; i >= 0; i-- {
+		idx := (s.idx - limit + i + probeWindowLen) % probeWindowLen
+		if s.successes[idx] {
+			break
+		}
+		count++
+	}
+	return count
+}
+
 // Prober continuously measures link quality to all directly-connected peers.
 type Prober struct {
-	registry *LinkRegistry
-	table    *Table
+	registry   *LinkRegistry
+	table      *Table
+	OnLinkDead func(nodeID string) // called when a dead link is detected and removed
 
 	mu    sync.RWMutex
 	stats map[string]*LinkStats // nodeID → stats
@@ -188,6 +208,24 @@ func (p *Prober) probeAll() {
 
 		if !r.ok {
 			Warnf("probe %s: timeout (loss=%.0f%%)", r.nodeID, lossRate*100)
+		}
+	}
+
+	// Detect dead links: 3+ consecutive failures with >90% loss → remove.
+	p.mu.RLock()
+	var dead []string
+	for nodeID, stats := range p.stats {
+		if stats.consecutiveFailures() >= 5 && stats.LossRate() > 0.9 {
+			dead = append(dead, nodeID)
+		}
+	}
+	p.mu.RUnlock()
+
+	for _, nodeID := range dead {
+		p.registry.Remove(nodeID)
+		Warnf("probe: dead link to %s removed (5+ consecutive failures)", nodeID)
+		if p.OnLinkDead != nil {
+			p.OnLinkDead(nodeID)
 		}
 	}
 }

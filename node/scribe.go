@@ -138,6 +138,7 @@ func (s *Scribe) AddDNSZone(zone DNSZone) error {
 		s.dnsZones = append(s.dnsZones, zone)
 	}
 	s.mu.Unlock()
+	s.node.emitEvent(EventEntry{Type: EventDNSChanged, Detail: zone.Type + " " + zone.Name})
 	s.broadcastNetConfig()
 	return nil
 }
@@ -231,6 +232,7 @@ func (s *Scribe) Revoke(nodeID string) {
 	s.revokedIDs[nodeID] = struct{}{}
 	s.mu.Unlock()
 	Warnf("scribe: revoked node %s", nodeID)
+	s.node.emitEvent(EventEntry{Type: EventNodeRevoked, NodeID: nodeID})
 	s.broadcastNetConfig()
 }
 
@@ -346,6 +348,7 @@ func (s *Scribe) SetTag(nodeID, tag string) {
 	s.nodeMeta[nodeID] = m
 	s.mu.Unlock()
 	Infof("scribe: tag %s +%s", nodeID, tag)
+	s.node.emitEvent(EventEntry{Type: EventTagChanged, NodeID: nodeID, Detail: "+" + tag})
 	s.broadcastNetConfig()
 }
 
@@ -432,6 +435,7 @@ func (s *Scribe) AddACLRule(rule ACLRule) {
 	s.mu.Unlock()
 	Infof("scribe: acl added %s %s → %s ports=%s",
 		rule.action(), rule.SrcPattern, rule.DstPattern, FormatPortRanges(rule.Ports))
+	s.node.emitEvent(EventEntry{Type: EventACLChanged, Detail: rule.SrcPattern + " → " + rule.DstPattern})
 	s.broadcastNetConfig()
 }
 

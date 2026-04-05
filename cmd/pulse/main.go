@@ -64,6 +64,15 @@ func main() {
 		case "ca":
 			cli.RunCA(os.Args[2:])
 			return
+		case "stats":
+			cli.RunStats(os.Args[2:])
+			return
+		case "events":
+			cli.RunEvents(os.Args[2:])
+			return
+		case "logs":
+			cli.RunLogs(os.Args[2:])
+			return
 		case "top":
 			cli.RunTop(os.Args[2:])
 			return

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,7 +24,7 @@ func NodeFlags(fs *flag.FlagSet) (
 	dnsEnabled *bool, dnsListen *string,
 	tunEnabled *bool, fecEnabled *bool,
 	scribeEnabled *bool, scribeListen *string,
-	exitEnabled *bool,
+	exitEnabled *bool, exitCIDRs *string,
 ) {
 	configPath = fs.String("config", "", "path to config.toml (optional)")
 	dataDir = fs.String("data-dir", "", "persistent data directory (default ~/.pulse)")
@@ -44,6 +45,7 @@ func NodeFlags(fs *flag.FlagSet) (
 	scribeEnabled = fs.Bool("scribe", false, "enable scribe (control plane)")
 	scribeListen = fs.String("scribe-listen", "", "scribe HTTP API address (default 127.0.0.1:8080)")
 	exitEnabled = fs.Bool("exit", false, "enable exit node")
+	exitCIDRs = fs.String("exit-cidrs", "", "comma-separated CIDRs this exit node advertises (e.g. 0.0.0.0/0)")
 	return
 }
 
@@ -55,7 +57,7 @@ func ApplyFlags(cfg *config.Config,
 	dnsEnabled bool, dnsListen string,
 	tunEnabled bool, fecEnabled bool,
 	scribeEnabled bool, scribeListen string,
-	exitEnabled bool,
+	exitEnabled bool, exitCIDRs string,
 ) {
 	if dataDir != "" {
 		cfg.Node.DataDir = dataDir
@@ -118,6 +120,9 @@ func ApplyFlags(cfg *config.Config,
 	if exitEnabled {
 		cfg.Exit.Enabled = true
 	}
+	if exitCIDRs != "" {
+		cfg.Exit.CIDRs = strings.Split(exitCIDRs, ",")
+	}
 }
 
 // RunNode starts a relay node. Called when pulse is run with no subcommand.
@@ -129,7 +134,7 @@ func RunNode(args []string) {
 		dnsEnabled, dnsListen,
 		tunEnabled, fecEnabled,
 		scribeEnabled, scribeListen,
-		exitEnabled := NodeFlags(fs)
+		exitEnabled, exitCIDRs := NodeFlags(fs)
 	logLevelFlag := fs.String("log-level", "", "log level: debug, info, warn, error (default: info)")
 	_ = fs.Parse(args)
 
@@ -139,7 +144,7 @@ func RunNode(args []string) {
 	}
 	ApplyFlags(cfg, *wsAddr, *listenAddr, *tcpAddr, *dataDir, *networkID, *joinAddr, *joinToken,
 		*caEnabled, *caToken, *socksEnabled, *socksListen,
-		*dnsEnabled, *dnsListen, *tunEnabled, *fecEnabled, *scribeEnabled, *scribeListen, *exitEnabled)
+		*dnsEnabled, *dnsListen, *tunEnabled, *fecEnabled, *scribeEnabled, *scribeListen, *exitEnabled, *exitCIDRs)
 
 	ll := *logLevelFlag
 	if ll == "" {
@@ -172,12 +177,6 @@ func RunNode(args []string) {
 		ca, err = LoadOrInitCA(caDir, cfg.CA.JoinToken)
 		if err != nil {
 			log.Fatalf("init CA: %v", err)
-		}
-		auditPath := filepath.Join(caDir, "audit.log")
-		if al, err := node.OpenAuditLog(auditPath); err != nil {
-			log.Printf("warning: could not open audit log: %v", err)
-		} else {
-			ca.Audit = al
 		}
 		log.Printf("CA loaded from %s", caDir)
 	}

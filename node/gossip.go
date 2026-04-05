@@ -26,7 +26,7 @@ type PeerEntry struct {
 	LossRate  float64 `json:"loss_rate,omitempty"`
 
 	// Link type — populated locally from LinkRegistry, not gossipped.
-	// Values: "nat" (direct P2P via hole punch), "quic" (direct QUIC),
+	// Values: "direct_quic" (direct P2P via NAT hole punch), "quic" (direct QUIC),
 	// "websocket" (relay via websocket+yamux), "" (no active session).
 	LinkType string `json:"link_type,omitempty"`
 
@@ -63,6 +63,7 @@ type Table struct {
 	mu      sync.RWMutex
 	entries map[string]PeerEntry // keyed by NodeID
 	version uint64               // monotonic counter, incremented on every mutation
+	OnPrune func(nodeID string)  // called when a stale peer is evicted
 }
 
 func NewTable() *Table {
@@ -201,10 +202,17 @@ func (t *Table) MergeFrom(entries []PeerEntry, selfID string) {
 func (t *Table) PruneStale(selfID string) {
 	cutoff := time.Now().Add(-peerStaleTTL)
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	var pruned []string
 	for id, e := range t.entries {
 		if id != selfID && e.LastSeen.Before(cutoff) {
 			delete(t.entries, id)
+			pruned = append(pruned, id)
+		}
+	}
+	t.mu.Unlock()
+	for _, id := range pruned {
+		if t.OnPrune != nil {
+			t.OnPrune(id)
 		}
 	}
 }

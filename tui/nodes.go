@@ -77,7 +77,7 @@ func (a *App) renderNodes() {
 			linkCellFn = cellFn
 		} else {
 			switch linkType {
-			case "nat":
+			case "direct_quic":
 				linkCellFn = func(text string) *tview.TableCell {
 					return tview.NewTableCell(text).
 						SetTextColor(tcell.ColorLimeGreen).

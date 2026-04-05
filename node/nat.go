@@ -53,6 +53,7 @@ type NATManager struct {
 	router    *Router
 	tlsCfg    *tls.Config
 	onSession func(ctx context.Context, session Session, hint, callerID string)
+	onEvent   func(EventEntry)
 
 	mu         sync.Mutex
 	publicAddr string              // discovered public IP:port
@@ -155,7 +156,16 @@ func (m *NATManager) whoami(ctx context.Context, relayAddr string) (string, erro
 func (m *NATManager) punchAll(ctx context.Context) {
 	entries := m.table.Snapshot()
 	for _, entry := range entries {
-		if entry.NodeID == m.selfID || entry.PublicAddr == "" {
+		if entry.NodeID == m.selfID {
+			continue
+		}
+		// Use PublicAddr (from /whoami) if available, otherwise fall back
+		// to the gossip-announced Addr for LAN/direct-reachable peers.
+		punchAddr := entry.PublicAddr
+		if punchAddr == "" {
+			punchAddr = entry.Addr
+		}
+		if punchAddr == "" {
 			continue
 		}
 		if link, ok := m.registry.Get(entry.NodeID); ok && !link.IsClosed() {
@@ -174,23 +184,31 @@ func (m *NATManager) punchAll(ctx context.Context) {
 		m.inProgress[entry.NodeID] = struct{}{}
 		m.mu.Unlock()
 
-		go func(e PeerEntry) {
+		go func(e PeerEntry, addr string) {
 			defer func() {
 				m.mu.Lock()
 				delete(m.inProgress, e.NodeID)
 				m.mu.Unlock()
 			}()
-			m.punchPeer(ctx, e)
-		}(entry)
+			m.punchPeer(ctx, e, addr)
+		}(entry, punchAddr)
 	}
 }
 
 // punchPeer sends a punch_start to the peer and waits for punch_ready before probing.
-func (m *NATManager) punchPeer(ctx context.Context, entry PeerEntry) {
+// targetAddr is the address to probe (PublicAddr or Addr fallback).
+func (m *NATManager) punchPeer(ctx context.Context, entry PeerEntry, targetAddr string) {
+	// Determine our own address to send in the punch_start message.
 	m.mu.Lock()
-	myPublic := m.publicAddr
+	myAddr := m.publicAddr
 	m.mu.Unlock()
-	if myPublic == "" {
+	if myAddr == "" {
+		// Fall back to our gossip-announced address for LAN scenarios.
+		if self, ok := m.table.Get(m.selfID); ok && self.Addr != "" {
+			myAddr = self.Addr
+		}
+	}
+	if myAddr == "" {
 		return
 	}
 
@@ -209,7 +227,7 @@ func (m *NATManager) punchPeer(ctx context.Context, entry PeerEntry) {
 	msg, _ := marshalStreamMsg(streamMsg{
 		Type:        "punch_start",
 		PunchNodeID: m.selfID,
-		PunchAddr:   myPublic,
+		PunchAddr:   myAddr,
 		PunchToken:  token,
 	})
 	_, _ = conn.Write(msg)
@@ -232,15 +250,17 @@ func (m *NATManager) punchPeer(ctx context.Context, entry PeerEntry) {
 
 	// Both sides are now ready. Begin probing.
 	Debugf("NAT punch to %s: ack received, starting probe window", entry.NodeID)
-	directSession, err := m.probeWindow(ctx, entry.PublicAddr)
+	directSession, err := m.probeWindow(ctx, targetAddr)
 	if err != nil {
 		Warnf("NAT punch to %s failed: %v", entry.NodeID, err)
+		m.emitEvent(EventEntry{Type: EventNATPunchFail, NodeID: entry.NodeID, Error: err.Error()})
 		return
 	}
 
 	link := newNATPeerLink(entry.NodeID, directSession)
 	m.registry.Add(link)
 	Debugf("NAT punch success: direct QUIC link to %s (%s)", entry.NodeID, entry.PublicAddr)
+	m.emitEvent(EventEntry{Type: EventNATPunchSuccess, NodeID: entry.NodeID, Detail: targetAddr})
 	if m.onSession != nil {
 		go m.onSession(ctx, directSession, entry.PublicAddr, entry.NodeID)
 	}
@@ -266,12 +286,14 @@ func (m *NATManager) HandlePunchStart(ctx context.Context, conn interface{ Write
 	directSession, err := m.probeWindow(ctx, peerPublicAddr)
 	if err != nil {
 		Warnf("NAT punch respond to %s failed: %v", peerNodeID, err)
+		m.emitEvent(EventEntry{Type: EventNATPunchFail, NodeID: peerNodeID, Error: err.Error()})
 		return
 	}
 
 	link := newNATPeerLink(peerNodeID, directSession)
 	m.registry.Add(link)
 	Debugf("NAT punch respond success: direct QUIC link to %s", peerNodeID)
+	m.emitEvent(EventEntry{Type: EventNATPunchSuccess, NodeID: peerNodeID, Detail: peerPublicAddr})
 	if m.onSession != nil {
 		go m.onSession(ctx, directSession, peerPublicAddr, peerNodeID)
 	}
@@ -324,6 +346,12 @@ func (m *NATManager) probeWindow(ctx context.Context, addr string) (Session, err
 				}
 			}()
 		}
+	}
+}
+
+func (m *NATManager) emitEvent(e EventEntry) {
+	if m.onEvent != nil {
+		m.onEvent(e)
 	}
 }
 
