@@ -18,12 +18,12 @@ func (n *Node) certRenewalLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n.checkCertRenewal(ctx)
+			n.checkCertRenewal()
 		}
 	}
 }
 
-func (n *Node) checkCertRenewal(ctx context.Context) {
+func (n *Node) checkCertRenewal() {
 	cert := n.identity.TLSCert
 	if len(cert.Certificate) == 0 {
 		return
@@ -37,12 +37,12 @@ func (n *Node) checkCertRenewal(ctx context.Context) {
 		return
 	}
 	Infof("cert: %s remaining — initiating renewal", remaining.Round(time.Hour))
-	if err := n.renewCert(ctx); err != nil {
+	if err := n.renewCert(); err != nil {
 		Warnf("cert: renewal failed: %v", err)
 	}
 }
 
-func (n *Node) renewCert(ctx context.Context) error {
+func (n *Node) renewCert() error {
 	req := JoinRequest{
 		PublicKey: ed25519.PublicKey(n.identity.PublicKey),
 		Token:     n.cfg.Join.Token,

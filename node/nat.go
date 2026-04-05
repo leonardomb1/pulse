@@ -134,11 +134,15 @@ func (m *NATManager) discoverPublicAddr(ctx context.Context) {
 // whoami calls the relay's /whoami endpoint and returns our observed public addr.
 func (m *NATManager) whoami(ctx context.Context, relayAddr string) (string, error) {
 	url := "https://" + relayAddr + "/whoami"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
 	client := &http.Client{
 		Transport: &http.Transport{TLSClientConfig: m.tlsCfg},
 		Timeout:   5 * time.Second,
 	}
-	resp, err := client.Get(url)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

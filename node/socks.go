@@ -218,7 +218,7 @@ func (s *SOCKSServer) resolveDest(host string, port uint16) (session Session, de
 		}
 		// Fast path: node ID is directly in the routing table.
 		if session, err = s.router.Resolve(nodeID); err == nil {
-			_, addr := parsePulseDest(host, port, "")
+			addr := parsePulseDest(host, port)
 			return session, addr, "", nodeID, nil
 		}
 		// Slow path: the hostname may be a friendly alias (CNAME) distributed
@@ -228,7 +228,7 @@ func (s *SOCKSServer) resolveDest(host string, port uint16) (session Session, de
 			if resolved != "" && resolved != host {
 				resolvedID := parsePulseNodeID(resolved)
 				if session, err = s.router.Resolve(resolvedID); err == nil {
-					_, addr := parsePulseDest(resolved, port, "")
+					addr := parsePulseDest(resolved, port)
 					return session, addr, resolved, resolvedID, nil
 				}
 			}
@@ -294,22 +294,17 @@ func parsePulseNodeID(host string) string {
 	return parts[len(parts)-1]
 }
 
-// parsePulseDest returns the nodeID and the in-mesh destAddr for a .pulse connection.
+// parsePulseDest returns the in-mesh destAddr for a .pulse connection.
 //
-//	"a3f2c1d4.pulse":5432       → ("a3f2c1d4", "localhost:5432")
-//	"postgres.a3f2c1d4.pulse":0 → ("a3f2c1d4", "postgres:5432") — service name used as host
-func parsePulseDest(host string, port uint16, rawDest string) (nodeID, addr string) {
+//	"a3f2c1d4.pulse":5432       → "localhost:5432"
+//	"postgres.a3f2c1d4.pulse":0 → "postgres:5432" — service name used as host
+func parsePulseDest(host string, port uint16) string {
 	h := strings.TrimSuffix(host, ".pulse")
 	parts := strings.Split(h, ".")
-	nodeID = parts[len(parts)-1]
 
 	portStr := fmt.Sprint(port)
 	if len(parts) == 1 {
-		// <nodeID>.pulse → localhost
-		addr = net.JoinHostPort("localhost", portStr)
-	} else {
-		// <service>.<nodeID>.pulse → <service>
-		addr = net.JoinHostPort(strings.Join(parts[:len(parts)-1], "."), portStr)
+		return net.JoinHostPort("localhost", portStr)
 	}
-	return
+	return net.JoinHostPort(strings.Join(parts[:len(parts)-1], "."), portStr)
 }

@@ -74,9 +74,9 @@ func startContainer(t *testing.T, name, ip string, args ...string) {
 	}
 }
 
-func waitForSocket(t *testing.T, container string, timeout time.Duration) {
+func waitForSocket(t *testing.T, container string) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		out, _ := dockerExec(container, "pulse", "status")
 		if strings.Contains(out, "Node:") {
@@ -127,7 +127,7 @@ func TestDockerMeshSetup(t *testing.T) {
 		"--token", testToken,
 		"--log-level", "info",
 	)
-	waitForSocket(t, "pulse-ca", 15*time.Second)
+	waitForSocket(t, "pulse-ca")
 
 	t.Run("CA status", func(t *testing.T) {
 		out, err := dockerExec("pulse-ca", "pulse", "status")
@@ -170,7 +170,7 @@ func TestDockerMeshSetup(t *testing.T) {
 		"--log-level", "info",
 		caIP+":8443", // bootstrap peer
 	)
-	waitForSocket(t, "pulse-relay", 15*time.Second)
+	waitForSocket(t, "pulse-relay")
 
 	// Wait for join + gossip convergence.
 	time.Sleep(15 * time.Second)
@@ -352,7 +352,7 @@ func TestDockerHopAndLatency(t *testing.T) {
 		"--network", "hop-test",
 		"--token", testToken,
 	)
-	waitForSocket(t, "pulse-hop-ca", 15*time.Second)
+	waitForSocket(t, "pulse-hop-ca")
 
 	// Start client, bootstrap to CA.
 	startContainer(t, "pulse-hop-client", relayIP,
@@ -363,7 +363,7 @@ func TestDockerHopAndLatency(t *testing.T) {
 		"--network", "hop-test",
 		caIP+":8443",
 	)
-	waitForSocket(t, "pulse-hop-client", 15*time.Second)
+	waitForSocket(t, "pulse-hop-client")
 
 	// Wait for handshake + several gossip rounds (10s each).
 	time.Sleep(20 * time.Second)
@@ -466,7 +466,7 @@ func TestDockerFEC(t *testing.T) {
 		"--network", "fec-test",
 		"--token", testToken,
 	)
-	waitForSocket(t, "pulse-fec-ca", 15*time.Second)
+	waitForSocket(t, "pulse-fec-ca")
 
 	// Client with FEC enabled.
 	startContainer(t, "pulse-fec-client", relayIP,
@@ -477,7 +477,7 @@ func TestDockerFEC(t *testing.T) {
 		"--network", "fec-test",
 		caIP+":8443",
 	)
-	waitForSocket(t, "pulse-fec-client", 15*time.Second)
+	waitForSocket(t, "pulse-fec-client")
 
 	time.Sleep(15 * time.Second)
 
@@ -529,7 +529,7 @@ func TestDockerExitNode(t *testing.T) {
 		"--network", "exit-test",
 		"--token", testToken,
 	)
-	waitForSocket(t, "pulse-exit-ca", 15*time.Second)
+	waitForSocket(t, "pulse-exit-ca")
 
 	// Client with TUN.
 	startContainer(t, "pulse-exit-client", clientIP,
@@ -539,7 +539,7 @@ func TestDockerExitNode(t *testing.T) {
 		"--network", "exit-test",
 		caIP+":8443",
 	)
-	waitForSocket(t, "pulse-exit-client", 15*time.Second)
+	waitForSocket(t, "pulse-exit-client")
 
 	time.Sleep(10 * time.Second) // gossip + auto-route
 

@@ -51,8 +51,8 @@ func TestFullGossipSimulation(t *testing.T) {
 	})
 
 	// Verify initial state: both see each other at hop 0.
-	assertHop(t, tableA, "B", 0, "after handshake, A sees B")
-	assertHop(t, tableB, "A", 0, "after handshake, B sees A")
+	assertHop(t, tableA, "B", "after handshake, A sees B")
+	assertHop(t, tableB, "A", "after handshake, B sees A")
 
 	// === Simulate 10 gossip rounds (100 seconds) ===
 	for round := 0; round < 10; round++ {
@@ -72,8 +72,8 @@ func TestFullGossipSimulation(t *testing.T) {
 		tableA.MergeFrom(tableB.Snapshot(), "A")
 
 		// After every round, both should still see each other at hop 0.
-		assertHop(t, tableA, "B", 0, "round %d: A sees B", round)
-		assertHop(t, tableB, "A", 0, "round %d: B sees A", round)
+		assertHop(t, tableA, "B", "round %d: A sees B", round)
+		assertHop(t, tableB, "A", "round %d: B sees A", round)
 	}
 
 	// === Simulate prober updating latency ===
@@ -104,8 +104,8 @@ func TestFullGossipSimulation(t *testing.T) {
 		tableB.MergeFrom(tableA.Snapshot(), "B")
 		tableA.MergeFrom(tableB.Snapshot(), "A")
 
-		assertHop(t, tableA, "B", 0, "post-prober round %d: A sees B", round)
-		assertHop(t, tableB, "A", 0, "post-prober round %d: B sees A", round)
+		assertHop(t, tableA, "B", "post-prober round %d: A sees B", round)
+		assertHop(t, tableB, "A", "post-prober round %d: B sees A", round)
 	}
 
 	// Latency should still be preserved after gossip rounds.
@@ -144,7 +144,7 @@ func TestDeltaGossipSimulation(t *testing.T) {
 
 	// B merges delta from A.
 	tableB.MergeFrom(deltaA, "B")
-	assertHop(t, tableB, "A", 0, "delta round 1: B sees A")
+	assertHop(t, tableB, "A", "delta round 1: B sees A")
 
 	// Round 2: B refreshes self.
 	selfB, _ := tableB.Get("B")
@@ -153,7 +153,7 @@ func TestDeltaGossipSimulation(t *testing.T) {
 
 	deltaB := tableB.SnapshotSince(versionB)
 	tableA.MergeFrom(deltaB, "A")
-	assertHop(t, tableA, "B", 0, "delta round 2: A sees B")
+	assertHop(t, tableA, "B", "delta round 2: A sees B")
 
 	// 10 more delta rounds.
 	for i := 0; i < 10; i++ {
@@ -171,8 +171,8 @@ func TestDeltaGossipSimulation(t *testing.T) {
 		tableB.MergeFrom(tableA.SnapshotSince(va), "B")
 		tableA.MergeFrom(tableB.SnapshotSince(vb), "A")
 
-		assertHop(t, tableA, "B", 0, "delta round %d: A sees B", i)
-		assertHop(t, tableB, "A", 0, "delta round %d: B sees A", i)
+		assertHop(t, tableA, "B", "delta round %d: A sees B", i)
+		assertHop(t, tableB, "A", "delta round %d: B sees A", i)
 	}
 }
 
@@ -210,19 +210,19 @@ func TestThreeNodeGossipPropagation(t *testing.T) {
 	}
 
 	// Direct links should be preserved.
-	assertHop(t, tableA, "B", 0, "A↔B direct")
-	assertHop(t, tableB, "A", 0, "B↔A direct")
-	assertHop(t, tableB, "C", 0, "B↔C direct")
-	assertHop(t, tableC, "B", 0, "C↔B direct")
+	assertHop(t, tableA, "B", "A↔B direct")
+	assertHop(t, tableB, "A", "B↔A direct")
+	assertHop(t, tableB, "C", "B↔C direct")
+	assertHop(t, tableC, "B", "C↔B direct")
 }
 
-func assertHop(t *testing.T, tbl *node.Table, nodeID string, expectedHop int, msgFormat string, args ...interface{}) {
+func assertHop(t *testing.T, tbl *node.Table, nodeID string, msgFormat string, args ...interface{}) {
 	t.Helper()
 	e, ok := tbl.Get(nodeID)
 	if !ok {
 		t.Fatalf(msgFormat+": node %s not found", append(args, nodeID)...)
 	}
-	if e.HopCount != expectedHop {
-		t.Fatalf(msgFormat+": expected hop %d, got %d", append(args, expectedHop, e.HopCount)...)
+	if e.HopCount != 0 {
+		t.Fatalf(msgFormat+": expected hop 0, got %d", append(args, e.HopCount)...)
 	}
 }
