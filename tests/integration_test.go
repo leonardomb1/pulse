@@ -341,7 +341,7 @@ func TestIntegrationRevoke(t *testing.T) {
 
 func TestIntegrationStop(t *testing.T) {
 	sock, cleanup := startTestDaemon(t)
-	_ = cleanup
+	defer cleanup()
 
 	resp, err := cli.CtrlDo(sock, map[string]string{"cmd": "stop"})
 	if err != nil {

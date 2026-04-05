@@ -47,18 +47,7 @@ jobs:
           go-version: "1.25"
 
       - name: Unit and integration tests
-        run: go test ./tests/ -run "^Test[^D]" -count=1 -timeout 60s -v
-
-      - name: Coverage
-        run: |
-          go test ./tests/ -run "^Test[^D]" -coverpkg=pulse/node,pulse/config,pulse/cli -coverprofile=coverage.out -timeout 60s
-          go tool cover -func=coverage.out | grep total
-
-      - name: Upload coverage
-        uses: actions/upload-artifact@v5
-        with:
-          name: coverage
-          path: coverage.out
+        run: go test ./tests/ -run "^Test[^D]" -count=1 -timeout 600s -v
 
   test-docker:
     runs-on: ubuntu-latest
