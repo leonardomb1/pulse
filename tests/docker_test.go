@@ -41,6 +41,10 @@ func dockerExec(container string, args ...string) (string, error) {
 
 func buildImage(t *testing.T) {
 	t.Helper()
+	// Skip rebuild if image already exists (e.g. pre-built in CI).
+	if out, _ := docker("image", "inspect", testImage); out != "" && !strings.Contains(out, "Error") {
+		return
+	}
 	out, err := docker("build", "-f", "../Dockerfile.test", "-t", testImage, "..")
 	if err != nil {
 		t.Fatalf("docker build failed:\n%s\n%v", out, err)
