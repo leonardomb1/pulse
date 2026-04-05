@@ -183,7 +183,7 @@ func (p *Prober) probeAll() {
 		if entry, ok := p.table.Get(r.nodeID); ok {
 			entry.LatencyMS = latencyMS
 			entry.LossRate = lossRate
-			p.table.Upsert(entry)
+			p.table.UpsertForce(entry)
 		}
 
 		if !r.ok {

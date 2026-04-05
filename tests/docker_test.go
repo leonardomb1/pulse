@@ -330,6 +330,122 @@ func TestDockerMeshSetup(t *testing.T) {
 	})
 }
 
+// TestDockerHopAndLatency verifies that direct peers stay at hop 0 and
+// latency gets measured after multiple gossip rounds. This catches the bug
+// where gossip overwrote direct handshake entries with higher hop counts.
+func TestDockerHopAndLatency(t *testing.T) {
+	if os.Getenv("PULSE_DOCKER_TEST") == "" {
+		t.Skip("set PULSE_DOCKER_TEST=1 to run Docker integration tests")
+	}
+	if !dockerAvailable() {
+		t.Skip("docker not available")
+	}
+
+	buildImage(t)
+	createNetwork(t)
+	defer cleanup("pulse-hop-ca", "pulse-hop-client")
+
+	// Start CA.
+	startContainer(t, "pulse-hop-ca", caIP,
+		"--ca", "--scribe", "--tun",
+		"--addr", caIP+":8443",
+		"--network", "hop-test",
+		"--token", testToken,
+	)
+	waitForSocket(t, "pulse-hop-ca", 15*time.Second)
+
+	// Start client, bootstrap to CA.
+	startContainer(t, "pulse-hop-client", relayIP,
+		"--tun",
+		"--addr", relayIP+":8443",
+		"--join", caIP+":8443",
+		"--token", testToken,
+		"--network", "hop-test",
+		caIP+":8443",
+	)
+	waitForSocket(t, "pulse-hop-client", 15*time.Second)
+
+	// Wait for handshake + several gossip rounds (10s each).
+	time.Sleep(20 * time.Second)
+
+	t.Run("CA sees client at hop 0", func(t *testing.T) {
+		out, _ := dockerExec("pulse-hop-ca", "pulse", "status")
+		// Should show the client with hop 0 (direct link, not hop 1 from gossip).
+		if !strings.Contains(out, relayIP) {
+			t.Fatalf("CA doesn't see client:\n%s", out)
+		}
+		// Parse hop count — look for the client's line.
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, relayIP) {
+				fields := strings.Fields(line)
+				// Find HOPS column (index depends on table layout).
+				for i, f := range fields {
+					if f == "0" && i > 3 { // hop count column
+						return // found hop 0 — pass
+					}
+				}
+				t.Errorf("client entry should have hop 0:\n%s", line)
+			}
+		}
+	})
+
+	t.Run("Client sees CA at hop 0", func(t *testing.T) {
+		out, _ := dockerExec("pulse-hop-client", "pulse", "status")
+		if !strings.Contains(out, caIP) {
+			t.Fatalf("client doesn't see CA:\n%s", out)
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, caIP) {
+				fields := strings.Fields(line)
+				for i, f := range fields {
+					if f == "0" && i > 3 {
+						return
+					}
+				}
+				t.Errorf("CA entry should have hop 0:\n%s", line)
+			}
+		}
+	})
+
+	// Wait more for prober to measure latency (runs every 5s).
+	time.Sleep(15 * time.Second)
+
+	t.Run("Latency measured after gossip rounds", func(t *testing.T) {
+		out, _ := dockerExec("pulse-hop-ca", "pulse", "status")
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, relayIP) {
+				fields := strings.Fields(line)
+				for _, f := range fields {
+					if strings.HasSuffix(f, "ms") {
+						t.Logf("latency measured: %s", f)
+						return
+					}
+				}
+				t.Fatalf("latency should be measured after 35s, got '-':\n%s", line)
+			}
+		}
+		t.Fatal("client not found in CA status")
+	})
+
+	// Verify stability: after more gossip, hop should still be 0.
+	time.Sleep(15 * time.Second)
+
+	t.Run("Hop 0 stable after 50+ seconds", func(t *testing.T) {
+		out, _ := dockerExec("pulse-hop-ca", "pulse", "status")
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, relayIP) {
+				fields := strings.Fields(line)
+				for i, f := range fields {
+					if f == "0" && i > 3 {
+						return
+					}
+				}
+				t.Errorf("hop should still be 0 after 50+ seconds:\n%s", line)
+			}
+		}
+	})
+}
+
 // TestDockerExitNode tests exit node functionality with TUN.
 func TestDockerExitNode(t *testing.T) {
 	if os.Getenv("PULSE_DOCKER_TEST") == "" {

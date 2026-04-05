@@ -79,7 +79,19 @@ func (t *Table) Upsert(e PeerEntry) {
 		return
 	}
 	existing, ok := t.entries[e.NodeID]
-	if !ok || e.LastSeen.After(existing.LastSeen) || e.HopCount < existing.HopCount {
+	if !ok {
+		t.version++
+		e.tableVersion = t.version
+		t.entries[e.NodeID] = e
+		return
+	}
+	// Protect direct links: a hop-0 entry (from handshake) can only be
+	// replaced by another hop-0 entry or a lower hop count — never by gossip
+	// which always arrives at hop >= 1. The pruner handles dead direct links.
+	if existing.HopCount == 0 && e.HopCount > 0 {
+		return
+	}
+	if e.LastSeen.After(existing.LastSeen) || e.HopCount < existing.HopCount {
 		t.version++
 		e.tableVersion = t.version
 		t.entries[e.NodeID] = e
