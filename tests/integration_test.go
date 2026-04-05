@@ -54,7 +54,7 @@ func startTestDaemon(t *testing.T, opts ...func(*config.Config)) (string, func()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		n.Run(ctx)
+		_ = n.Run(ctx)
 		close(done)
 	}()
 
@@ -88,17 +88,17 @@ func TestIntegrationStatus(t *testing.T) {
 	}
 
 	var selfID string
-	json.Unmarshal(resp["self"], &selfID)
+	_ = json.Unmarshal(resp["self"], &selfID)
 	if selfID == "" {
 		t.Fatal("empty self ID")
 	}
 
 	var networkID string
-	json.Unmarshal(resp["network_id"], &networkID)
+	_ = json.Unmarshal(resp["network_id"], &networkID)
 	// Should be empty (not set in test)
 
 	var peers []node.PeerEntry
-	json.Unmarshal(resp["peers"], &peers)
+	_ = json.Unmarshal(resp["peers"], &peers)
 	// Should have at least self
 	if len(peers) == 0 {
 		t.Fatal("no peers in status")
@@ -124,7 +124,7 @@ func TestIntegrationNetworkID(t *testing.T) {
 	}
 
 	var networkID string
-	json.Unmarshal(resp["network_id"], &networkID)
+	_ = json.Unmarshal(resp["network_id"], &networkID)
 	if networkID != "test-net" {
 		t.Errorf("network_id = %q, want test-net", networkID)
 	}
@@ -140,7 +140,7 @@ func TestIntegrationToken(t *testing.T) {
 		t.Fatalf("token: %v", err)
 	}
 	var token string
-	json.Unmarshal(resp["token"], &token)
+	_ = json.Unmarshal(resp["token"], &token)
 	if token != "test-token" {
 		t.Errorf("token = %q, want test-token", token)
 	}
@@ -158,7 +158,7 @@ func TestIntegrationTokenCRUD(t *testing.T) {
 		t.Fatalf("token-create: %v", err)
 	}
 	var created node.JoinToken
-	json.Unmarshal(resp["token"], &created)
+	_ = json.Unmarshal(resp["token"], &created)
 	if len(created.Value) != 64 {
 		t.Fatalf("token value length = %d", len(created.Value))
 	}
@@ -169,7 +169,7 @@ func TestIntegrationTokenCRUD(t *testing.T) {
 	// List.
 	resp, _ = cli.CtrlDo(sock, map[string]string{"cmd": "token-list"})
 	var tokens []node.JoinToken
-	json.Unmarshal(resp["tokens"], &tokens)
+	_ = json.Unmarshal(resp["tokens"], &tokens)
 	if len(tokens) != 1 {
 		t.Fatalf("expected 1 token, got %d", len(tokens))
 	}
@@ -183,7 +183,7 @@ func TestIntegrationTokenCRUD(t *testing.T) {
 	}
 
 	resp, _ = cli.CtrlDo(sock, map[string]string{"cmd": "token-list"})
-	json.Unmarshal(resp["tokens"], &tokens)
+	_ = json.Unmarshal(resp["tokens"], &tokens)
 	if len(tokens) != 0 {
 		t.Errorf("expected 0 tokens after revoke, got %d", len(tokens))
 	}
@@ -205,15 +205,15 @@ func TestIntegrationDNSCRUD(t *testing.T) {
 	// List.
 	resp, _ := cli.CtrlDo(sock, map[string]string{"cmd": "dns-list"})
 	var zones []node.DNSZone
-	json.Unmarshal(resp["zones"], &zones)
+	_ = json.Unmarshal(resp["zones"], &zones)
 	if len(zones) != 1 || zones[0].Name != "test.pulse" {
 		t.Fatalf("dns-list: %+v", zones)
 	}
 
 	// Remove.
-	cli.CtrlDo(sock, map[string]string{"cmd": "dns-remove", "name": "test.pulse", "type": "A"})
+	_, _ = cli.CtrlDo(sock, map[string]string{"cmd": "dns-remove", "name": "test.pulse", "type": "A"})
 	resp, _ = cli.CtrlDo(sock, map[string]string{"cmd": "dns-list"})
-	json.Unmarshal(resp["zones"], &zones)
+	_ = json.Unmarshal(resp["zones"], &zones)
 	if len(zones) != 0 {
 		t.Errorf("expected 0 zones, got %d", len(zones))
 	}
@@ -234,15 +234,15 @@ func TestIntegrationRouteCRUD(t *testing.T) {
 	// List.
 	resp, _ := cli.CtrlDo(sock, map[string]string{"cmd": "route-list"})
 	var routes []json.RawMessage
-	json.Unmarshal(resp["routes"], &routes)
+	_ = json.Unmarshal(resp["routes"], &routes)
 	if len(routes) != 1 {
 		t.Fatalf("expected 1 route, got %d", len(routes))
 	}
 
 	// Remove.
-	cli.CtrlDo(sock, map[string]string{"cmd": "route-remove", "cidr": "10.0.0.0/8"})
+	_, _ = cli.CtrlDo(sock, map[string]string{"cmd": "route-remove", "cidr": "10.0.0.0/8"})
 	resp, _ = cli.CtrlDo(sock, map[string]string{"cmd": "route-list"})
-	json.Unmarshal(resp["routes"], &routes)
+	_ = json.Unmarshal(resp["routes"], &routes)
 	if len(routes) != 0 {
 		t.Errorf("expected 0 routes, got %d", len(routes))
 	}
@@ -262,15 +262,15 @@ func TestIntegrationACLCRUD(t *testing.T) {
 	// List.
 	resp, _ := cli.CtrlDo(sock, map[string]string{"cmd": "acl-list"})
 	var rules []node.ACLRule
-	json.Unmarshal(resp["rules"], &rules)
+	_ = json.Unmarshal(resp["rules"], &rules)
 	if len(rules) != 1 || rules[0].Action != "deny" {
 		t.Fatalf("acl-list: %+v", rules)
 	}
 
 	// Remove.
-	cli.CtrlDo(sock, map[string]interface{}{"cmd": "acl-remove", "index": 0})
+	_, _ = cli.CtrlDo(sock, map[string]interface{}{"cmd": "acl-remove", "index": 0})
 	resp, _ = cli.CtrlDo(sock, map[string]string{"cmd": "acl-list"})
-	json.Unmarshal(resp["rules"], &rules)
+	_ = json.Unmarshal(resp["rules"], &rules)
 	if len(rules) != 0 {
 		t.Errorf("expected 0 rules, got %d", len(rules))
 	}
@@ -283,7 +283,7 @@ func TestIntegrationTagAndName(t *testing.T) {
 	// Get self ID.
 	resp, _ := cli.CtrlDo(sock, map[string]string{"cmd": "status"})
 	var selfID string
-	json.Unmarshal(resp["self"], &selfID)
+	_ = json.Unmarshal(resp["self"], &selfID)
 
 	// Tag.
 	_, err := cli.CtrlDo(sock, map[string]string{"cmd": "tag-add", "node_id": selfID, "tag": "prod"})
@@ -303,7 +303,7 @@ func TestIntegrationTagAndName(t *testing.T) {
 	// Verify in status.
 	resp, _ = cli.CtrlDo(sock, map[string]string{"cmd": "status"})
 	var peers []node.PeerEntry
-	json.Unmarshal(resp["peers"], &peers)
+	_ = json.Unmarshal(resp["peers"], &peers)
 
 	found := false
 	for _, p := range peers {
@@ -377,7 +377,7 @@ func TestIntegrationNonScribeRejects(t *testing.T) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGUSR2) // won't fire
 	defer cancel()
 	done := make(chan struct{})
-	go func() { n.Run(ctx); close(done) }()
+	go func() { _ = n.Run(ctx); close(done) }()
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

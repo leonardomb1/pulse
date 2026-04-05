@@ -44,7 +44,7 @@ func (a *App) handleRoutesKey(event *tcell.EventKey) *tcell.EventKey {
 		if idx >= 0 && idx < len(a.routes) {
 			r := a.routes[idx]
 			a.showConfirmModal(fmt.Sprintf("Remove route %s?", r.CIDR), func() {
-				ctrlDo(a.socketPath, map[string]string{"cmd": "route-remove", "cidr": r.CIDR})
+				_, _ = ctrlDo(a.socketPath, map[string]string{"cmd": "route-remove", "cidr": r.CIDR})
 				a.refresh()
 				a.app.QueueUpdateDraw(func() { a.renderCurrentPage() })
 			})
@@ -68,7 +68,7 @@ func (a *App) showRouteAddForm() {
 			return
 		}
 		go func() {
-			ctrlDo(a.socketPath, map[string]string{"cmd": "route-add", "cidr": cidr, "via": via})
+			_, _ = ctrlDo(a.socketPath, map[string]string{"cmd": "route-add", "cidr": cidr, "via": via})
 			a.refresh()
 			a.app.QueueUpdateDraw(func() { a.renderCurrentPage() })
 		}()

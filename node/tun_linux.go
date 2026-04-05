@@ -4,12 +4,9 @@ package node
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -158,8 +155,8 @@ func (t *tunManager) routeOutbound(pkt []byte) {
 				return
 			}
 			hdr, _ := marshalStreamMsg(streamMsg{Type: "tun", NodeID: t.node.id})
-			conn.Write(hdr)
-			tunFrameWrite(conn, pkt)
+			_, _ = conn.Write(hdr)
+			_ = tunFrameWrite(conn, pkt)
 			conn.Close()
 			return
 		}
@@ -333,7 +330,7 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 				// Already handled above.
 			} else if recovered != nil {
 				// A previous missing packet was recovered — write it too.
-				t.fd.Write(recovered)
+				_, _ = t.fd.Write(recovered)
 			}
 		} else {
 			var err error
@@ -355,7 +352,7 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 				fwdPipe := t.pipes[fwdNodeID]
 				t.pipesMu.RUnlock()
 				if fwdPipe != nil {
-					tunFrameWrite(fwdPipe, pkt)
+					_ = tunFrameWrite(fwdPipe, pkt)
 					if buf != nil {
 						putPktBuf(buf)
 					}
@@ -440,117 +437,7 @@ func (t *tunManager) syncKernelRoutes() {
 	}
 }
 
-// netlinkRouteAdd adds a route via raw netlink (no exec needed, works with CAP_NET_ADMIN).
-func netlinkRouteAdd(cidr string, ifIndex int) error {
-	ip, ipNet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return err
-	}
-	ones, _ := ipNet.Mask.Size()
-	dst := ip.To4()
-	if dst == nil {
-		return fmt.Errorf("IPv4 only")
-	}
-
-	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_ROUTE)
-	if err != nil {
-		return err
-	}
-	defer unix.Close(fd)
-	unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK})
-
-	// Build RTM_NEWROUTE message.
-	msg := make([]byte, 0, 128)
-	// nlmsghdr (16 bytes)
-	msg = append(msg, 0, 0, 0, 0) // len (fill later)
-	msg = appendU16(msg, unix.RTM_NEWROUTE)
-	msg = appendU16(msg, unix.NLM_F_REQUEST|unix.NLM_F_CREATE|unix.NLM_F_REPLACE|unix.NLM_F_ACK)
-	msg = appendU32(msg, 1) // seq
-	msg = appendU32(msg, 0) // pid
-	// rtmsg (12 bytes)
-	msg = append(msg, unix.AF_INET) // family
-	msg = append(msg, byte(ones))   // dst_len
-	msg = append(msg, 0)            // src_len
-	msg = append(msg, 0)            // tos
-	msg = append(msg, unix.RT_TABLE_MAIN)
-	msg = append(msg, unix.RTPROT_STATIC)
-	msg = append(msg, unix.RT_SCOPE_LINK)
-	msg = append(msg, unix.RTN_UNICAST)
-	msg = appendU32(msg, 0) // flags
-	// RTA_DST
-	msg = appendRTA(msg, unix.RTA_DST, dst[:4])
-	// RTA_OIF
-	oif := make([]byte, 4)
-	binary.LittleEndian.PutUint32(oif, uint32(ifIndex))
-	msg = appendRTA(msg, unix.RTA_OIF, oif)
-	// Fill length.
-	binary.LittleEndian.PutUint32(msg[0:4], uint32(len(msg)))
-
-	return unix.Sendto(fd, msg, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK})
-}
-
-func netlinkRouteDel(cidr string, ifIndex int) {
-	ip, ipNet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return
-	}
-	ones, _ := ipNet.Mask.Size()
-	dst := ip.To4()
-	if dst == nil {
-		return
-	}
-
-	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_ROUTE)
-	if err != nil {
-		return
-	}
-	defer unix.Close(fd)
-	unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK})
-
-	msg := make([]byte, 0, 128)
-	msg = append(msg, 0, 0, 0, 0)
-	msg = appendU16(msg, unix.RTM_DELROUTE)
-	msg = appendU16(msg, unix.NLM_F_REQUEST|unix.NLM_F_ACK)
-	msg = appendU32(msg, 1)
-	msg = appendU32(msg, 0)
-	msg = append(msg, unix.AF_INET)
-	msg = append(msg, byte(ones))
-	msg = append(msg, 0)
-	msg = append(msg, 0)
-	msg = append(msg, unix.RT_TABLE_MAIN)
-	msg = append(msg, unix.RTPROT_STATIC)
-	msg = append(msg, unix.RT_SCOPE_LINK)
-	msg = append(msg, unix.RTN_UNICAST)
-	msg = appendU32(msg, 0)
-	msg = appendRTA(msg, unix.RTA_DST, dst[:4])
-	oif := make([]byte, 4)
-	binary.LittleEndian.PutUint32(oif, uint32(ifIndex))
-	msg = appendRTA(msg, unix.RTA_OIF, oif)
-	binary.LittleEndian.PutUint32(msg[0:4], uint32(len(msg)))
-
-	unix.Sendto(fd, msg, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK})
-}
-
-func appendU16(b []byte, v uint16) []byte {
-	return append(b, byte(v), byte(v>>8))
-}
-
-func appendU32(b []byte, v uint32) []byte {
-	return append(b, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
-}
-
-func appendRTA(b []byte, typ uint16, data []byte) []byte {
-	rlen := 4 + len(data)
-	aligned := (rlen + 3) &^ 3
-	b = appendU16(b, uint16(rlen))
-	b = appendU16(b, typ)
-	b = append(b, data...)
-	for len(b)%4 != 0 {
-		b = append(b, 0)
-	}
-	_ = aligned
-	return b
-}
+var _ TunDevice = (*tunManager)(nil)
 
 // refreshMeshIPs runs a background ticker to keep the IP map fresh.
 func (t *tunManager) refreshMeshIPs(ctx context.Context) {
@@ -642,52 +529,3 @@ func configureTun(ifName string, meshIP net.IP, cidr string) error {
 
 	return nil
 }
-
-// configureExitForwarding enables IP forwarding and NAT masquerade for exit node traffic.
-func configureExitForwarding(meshCIDR string) {
-	// Enable IP forwarding.
-	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644); err != nil {
-		Warnf("tun: exit: enable ip_forward: %v (try running with sudo)", err)
-	} else {
-		Infof("tun: exit: ip_forward enabled")
-	}
-
-	// Detect the default external interface.
-	extIface := defaultInterface()
-	if extIface == "" {
-		Warnf("tun: exit: could not detect default interface — masquerade not configured")
-		return
-	}
-
-	// Add masquerade rule (idempotent with -C check).
-	args := []string{"-t", "nat", "-A", "POSTROUTING", "-s", meshCIDR, "-o", extIface, "-j", "MASQUERADE"}
-	checkArgs := []string{"-t", "nat", "-C", "POSTROUTING", "-s", meshCIDR, "-o", extIface, "-j", "MASQUERADE"}
-	if exec.Command("iptables", checkArgs...).Run() == nil {
-		Infof("tun: exit: masquerade rule already exists for %s via %s", meshCIDR, extIface)
-		return
-	}
-	if out, err := exec.Command("iptables", args...).CombinedOutput(); err != nil {
-		Warnf("tun: exit: iptables masquerade: %s: %v (try running with sudo)", out, err)
-	} else {
-		Infof("tun: exit: masquerade enabled: %s → %s", meshCIDR, extIface)
-	}
-}
-
-// defaultInterface returns the name of the interface used for the default route.
-func defaultInterface() string {
-	out, err := exec.Command("ip", "route", "show", "default").Output()
-	if err != nil {
-		return ""
-	}
-	// Parse: "default via 10.0.0.1 dev eth0 ..."
-	fields := strings.Fields(string(out))
-	for i, f := range fields {
-		if f == "dev" && i+1 < len(fields) {
-			return fields[i+1]
-		}
-	}
-	return ""
-}
-
-var _ TunDevice = (*tunManager)(nil)
-var _ = binary.LittleEndian

@@ -46,7 +46,7 @@ func TestStoreJoinResult(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create identity first.
-	node.LoadOrCreateIdentity(dir)
+	_, _ = node.LoadOrCreateIdentity(dir)
 
 	// Simulate a join response.
 	resp := node.JoinResponse{
@@ -94,7 +94,7 @@ func TestFullJoinCycle(t *testing.T) {
 	}
 
 	// Store result.
-	node.StoreJoinResult(nodeDir, resp)
+	_ = node.StoreJoinResult(nodeDir, resp)
 
 	// Reload — should now be joined.
 	id2, _ := node.LoadOrCreateIdentity(nodeDir)

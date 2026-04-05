@@ -1,18 +1,13 @@
 package node
 
 import (
-	"bufio"
 	"context"
-	"crypto/ed25519"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -50,10 +45,9 @@ type streamMsg struct {
 	SentAt time.Time `json:"sent_at,omitempty"`
 
 	// NAT punch coordination
-	PunchNodeID string    `json:"punch_node,omitempty"`
-	PunchAddr   string    `json:"punch_addr,omitempty"`
-	PunchToken  string    `json:"punch_token,omitempty"`
-	PunchAt     time.Time `json:"punch_at,omitempty"`
+	PunchNodeID string `json:"punch_node,omitempty"`
+	PunchAddr   string `json:"punch_addr,omitempty"`
+	PunchToken  string `json:"punch_token,omitempty"`
 
 	// network config (distributed by scribe)
 	NetConfig *SignedNetConfig `json:"net_config,omitempty"`
@@ -63,14 +57,6 @@ type streamMsg struct {
 
 	// revoke (forwarded to scribe over mesh)
 	RevokeNodeID string `json:"revoke_node_id,omitempty"`
-}
-
-// authedConn wraps a net.Conn with the verified identity of the remote node
-// and a reference to its parent session (needed to register in LinkRegistry).
-type authedConn struct {
-	net.Conn
-	callerNodeID string
-	session      Session // the multiplexed session this stream came from
 }
 
 // Node is a running relay instance.
@@ -92,6 +78,7 @@ type Node struct {
 	scribe     *Scribe
 	netCfg     netConfigStore
 	shutdown   chan struct{} // closed by Stop() to trigger graceful shutdown
+	traffic    TrafficCounters
 
 	// Delta-gossip: track last-sent table version per peer.
 	gossipVersionsMu sync.Mutex
@@ -120,7 +107,7 @@ func New(cfg *config.Config, ca *CA) (*Node, error) {
 	aclTable := NewACLTable()
 
 	exitRoutes := NewExitRouteTable(cfg.Exit.RoutesFile)
-	exitRoutes.Load() // best-effort; no error if file missing
+	_ = exitRoutes.Load() // best-effort; no error if file missing
 
 	isCA := ca != nil
 	isExit := cfg.Exit.Enabled
@@ -188,7 +175,7 @@ func New(cfg *config.Config, ca *CA) (*Node, error) {
 
 	// DNS server gets a callback to serve NetworkConfig zones.
 	n.dns = NewDNSServer(cfg.DNS.Listen, table, func() []DNSZone { return n.netCfg.dnsZones() })
-	n.socks = NewSOCKSServer(cfg.SOCKS.Listen, router, table, exitRoutes, identity.NodeID, func() []DNSZone { return n.netCfg.dnsZones() })
+	n.socks = NewSOCKSServer(cfg.SOCKS.Listen, router, table, exitRoutes, identity.NodeID, func() []DNSZone { return n.netCfg.dnsZones() }, &n.traffic)
 	n.nat = NewNATManager(identity.NodeID, table, registry, router, n.clientTLSConfig(), n.onPeerSession)
 
 	if isScribe {
@@ -258,7 +245,7 @@ func (n *Node) Run(ctx context.Context) error {
 	}
 
 	go func() {
-		if err := ServeTCP(n.cfg.Node.TCPListen, n.router, n.aclTable, n.id, n.netCfg.isRevoked); err != nil {
+		if err := ServeTCP(n.cfg.Node.TCPListen, n.router, n.id, n.netCfg.isRevoked, &n.traffic); err != nil {
 			Errorf("tcp listener error: %v", err)
 		}
 	}()
@@ -269,10 +256,10 @@ func (n *Node) Run(ctx context.Context) error {
 	go n.nat.Run(ctx)
 
 	if n.cfg.SOCKS.Enabled {
-		go n.socks.ListenAndServe(ctx)
+		go func() { _ = n.socks.ListenAndServe(ctx) }()
 	}
 	if n.cfg.DNS.Enabled {
-		go n.dns.ListenAndServe(ctx)
+		go func() { _ = n.dns.ListenAndServe(ctx) }()
 	}
 	if n.scribe != nil {
 		go n.scribe.Run(ctx)
@@ -344,69 +331,6 @@ func (n *Node) savePeers() {
 	}
 }
 
-// certRenewalLoop checks cert expiry hourly and auto-renews when <30 days remain.
-func (n *Node) certRenewalLoop(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			n.checkCertRenewal(ctx)
-		}
-	}
-}
-
-func (n *Node) checkCertRenewal(ctx context.Context) {
-	cert := n.identity.TLSCert
-	if len(cert.Certificate) == 0 {
-		return
-	}
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		return
-	}
-	remaining := time.Until(leaf.NotAfter)
-	if remaining > 30*24*time.Hour {
-		return
-	}
-	Infof("cert: %s remaining — initiating renewal", remaining.Round(time.Hour))
-	if err := n.renewCert(ctx); err != nil {
-		Warnf("cert: renewal failed: %v", err)
-	}
-}
-
-func (n *Node) renewCert(ctx context.Context) error {
-	req := JoinRequest{
-		PublicKey: ed25519.PublicKey(n.identity.PublicKey),
-		Token:     n.cfg.Join.Token,
-	}
-	resp := n.resolveJoin(req)
-	if resp.Error != "" {
-		return fmt.Errorf("CA rejected renewal: %s", resp.Error)
-	}
-	if err := StoreJoinResult(n.cfg.Node.DataDir, resp); err != nil {
-		return err
-	}
-	Infof("cert: renewed successfully")
-	return n.ReloadIdentity()
-}
-
-// listenAddr returns the address to bind listeners to.
-// If cfg.Node.Listen is set it is used; otherwise cfg.Node.Addr.
-// This lets nodes advertise a public IP/hostname while binding to 0.0.0.0 or a private IP.
-// ReloadIdentity reloads the identity from disk (after a successful join).
-func (n *Node) ReloadIdentity() error {
-	id, err := LoadOrCreateIdentity(n.cfg.Node.DataDir)
-	if err != nil {
-		return err
-	}
-	n.identity = id
-	Infof("identity reloaded: joined=%v", id.Joined)
-	return nil
-}
-
 func (n *Node) listenAddr() string {
 	if n.cfg.Node.Listen != "" {
 		return n.cfg.Node.Listen
@@ -471,389 +395,6 @@ func (n *Node) serveWS(ctx context.Context) {
 	}
 }
 
-func (n *Node) handleJoinConn(conn net.Conn) {
-	defer conn.Close()
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return
-	}
-	var msg streamMsg
-	if err := json.Unmarshal([]byte(line), &msg); err != nil || msg.Type != "join" || msg.JoinReq == nil {
-		return
-	}
-	resp := n.resolveJoin(*msg.JoinReq)
-	reply, _ := json.Marshal(streamMsg{Type: "join_response", JoinResp: &resp})
-	conn.Write(append(reply, '\n'))
-}
-
-func (n *Node) resolveJoin(req JoinRequest) JoinResponse {
-	if n.ca != nil {
-		return n.ca.HandleJoin(req)
-	}
-	caEntry, ok := n.table.FindCA()
-	if !ok {
-		return JoinResponse{Error: "CA node not reachable from this relay"}
-	}
-	session, err := n.router.Resolve(caEntry.NodeID)
-	if err != nil {
-		return JoinResponse{Error: fmt.Sprintf("no route to CA: %v", err)}
-	}
-	conn, err := session.Open()
-	if err != nil {
-		return JoinResponse{Error: fmt.Sprintf("open stream to CA: %v", err)}
-	}
-	defer conn.Close()
-
-	fwd, _ := json.Marshal(streamMsg{Type: "join", JoinReq: &req})
-	conn.Write(append(fwd, '\n'))
-
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return JoinResponse{Error: "no response from CA"}
-	}
-	var reply streamMsg
-	if err := json.Unmarshal([]byte(line), &reply); err != nil || reply.JoinResp == nil {
-		return JoinResponse{Error: "malformed CA response"}
-	}
-	return *reply.JoinResp
-}
-
-// Join connects to a relay's /join endpoint for first-time bootstrapping.
-func Join(ctx context.Context, relayAddr string, req JoinRequest) (*JoinResponse, error) {
-	tlsCfg := &tls.Config{InsecureSkipVerify: true}
-	session, err := dialPeer(ctx, relayAddr, tlsCfg, "/join")
-	if err != nil {
-		return nil, fmt.Errorf("connect to relay: %w", err)
-	}
-	defer session.Close()
-
-	conn, err := session.Open()
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-
-	msg, _ := json.Marshal(streamMsg{Type: "join", JoinReq: &req})
-	conn.Write(append(msg, '\n'))
-
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, err
-	}
-	var reply streamMsg
-	if err := json.Unmarshal([]byte(line), &reply); err != nil || reply.JoinResp == nil {
-		return nil, errors.New("malformed join response")
-	}
-	if reply.JoinResp.Error != "" {
-		return nil, errors.New(reply.JoinResp.Error)
-	}
-	return reply.JoinResp, nil
-}
-
-func (n *Node) onPeerSession(ctx context.Context, session Session, hint, callerID string) {
-	go n.sendHandshake(session)
-	for {
-		conn, err := session.Accept()
-		if err != nil {
-			break
-		}
-		go n.dispatchStream(&authedConn{Conn: conn, callerNodeID: callerID, session: session})
-	}
-}
-
-func (n *Node) sendHandshake(session Session) {
-	conn, err := session.Open()
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-
-	// Include mesh IP if tun is active.
-	meshIP := ""
-	if n.cfg.Tun.Enabled {
-		meshIP = MeshIPFromNodeID(n.id).String()
-	}
-
-	scribeAPIAddr := ""
-	if n.cfg.Scribe.Enabled {
-		scribeAPIAddr = n.cfg.Scribe.Listen
-	}
-	msg := streamMsg{
-		Type:          "handshake",
-		NodeID:        n.id,
-		NetworkID:     n.cfg.Node.NetworkID,
-		Addr:          n.cfg.Node.Addr,
-		PublicKey:     n.identity.PublicKey,
-		IsCA:          n.ca != nil,
-		IsExit:        n.cfg.Exit.Enabled,
-		IsScribe:      n.cfg.Scribe.Enabled,
-		ScribeAPIAddr: scribeAPIAddr,
-		MeshIP:        meshIP,
-	}
-	line, _ := json.Marshal(msg)
-	conn.Write(append(line, '\n'))
-}
-
-func (n *Node) dispatchStream(ac *authedConn) {
-	reader := bufio.NewReader(ac)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		ac.Close()
-		return
-	}
-	var msg streamMsg
-	if err := json.Unmarshal([]byte(line), &msg); err != nil {
-		ac.Close()
-		return
-	}
-
-	// Revocation check: reject any stream (except handshake itself) from a revoked node.
-	if msg.Type != "handshake" && ac.callerNodeID != "" && n.netCfg.isRevoked(ac.callerNodeID) {
-		Warnf("revocation: rejected stream type=%q from %s", msg.Type, ac.callerNodeID)
-		ac.Close()
-		return
-	}
-
-	switch msg.Type {
-	case "handshake":
-		n.handleHandshake(msg, ac)
-		ac.Close()
-
-	case "gossip":
-		n.table.MergeFrom(msg.Entries, n.id)
-		// ACLs from gossip are unsigned — only scribe-signed NetworkConfig ACLs are trusted.
-		Debugf("gossip: merged %d entries", len(msg.Entries))
-		ac.Close()
-
-	case "probe":
-		pong, _ := json.Marshal(streamMsg{Type: "pong", SentAt: msg.SentAt})
-		ac.Write(append(pong, '\n'))
-		ac.Close()
-
-	case "join":
-		if msg.JoinReq == nil {
-			ac.Close()
-			return
-		}
-		resp := n.resolveJoin(*msg.JoinReq)
-		reply, _ := json.Marshal(streamMsg{Type: "join_response", JoinResp: &resp})
-		ac.Write(append(reply, '\n'))
-		ac.Close()
-
-	case "punch":
-		go n.nat.HandlePunchRequest(context.Background(),
-			msg.PunchNodeID, msg.PunchAddr, msg.PunchToken, msg.PunchAt)
-		ac.Close()
-
-	case "netconfig":
-		if msg.NetConfig != nil {
-			n.mergeNetConfig(*msg.NetConfig)
-		}
-		ac.Close()
-
-	case "stats":
-		if msg.Stats != nil && n.scribe != nil {
-			n.scribe.AcceptStats(*msg.Stats)
-		}
-		ac.Close()
-
-	case "revoke":
-		// A node forwarding a revoke request to the scribe.
-		if msg.RevokeNodeID != "" && n.scribe != nil {
-			go n.scribe.Revoke(context.Background(), msg.RevokeNodeID)
-		}
-		ac.Close()
-
-	case "tunpipe":
-		// Persistent bidirectional packet pipe — one per peer pair.
-		// The remote side initiated; run the pipe read loop (blocks until closed).
-		if n.tun != nil {
-			n.tun.RunPipe(msg.NodeID, ac.Conn)
-		} else {
-			ac.Close()
-		}
-
-	case "tun":
-		// Legacy one-shot stream, used before a pipe is established.
-		if n.tun != nil {
-			n.tun.HandleInbound(ac.Conn)
-		} else {
-			ac.Close()
-		}
-
-	case "tunnel":
-		req := TunnelRequest{DestNodeID: msg.DestNodeID, DestAddr: msg.DestAddr}
-		callerID := ac.callerNodeID
-		if callerID == "" {
-			callerID = msg.NodeID // fallback: use handshake-announced ID
-		}
-		if n.netCfg.isRevoked(req.DestNodeID) {
-			Warnf("tunnel: dest %s is revoked — dropping", req.DestNodeID)
-			ac.Close()
-			return
-		}
-		HandleRelayStream(ac.Conn, reader, req, n.id, callerID, n.router, n.aclTable, n.netCfg.nodeMeta)
-
-	default:
-		Infof("unknown stream type: %q", msg.Type)
-		ac.Close()
-	}
-}
-
-// mergeNetConfig accepts a SignedNetConfig from the scribe, verifies it, and
-// if the version is newer, applies it and propagates to all peers.
-func (n *Node) mergeNetConfig(snc SignedNetConfig) {
-	// Look up scribe public key from gossip table.
-	scribeEntry, ok := n.table.Get(snc.ScribeID)
-	if !ok {
-		Infof("netconfig: scribe %s not in table — ignoring", snc.ScribeID)
-		return
-	}
-	if len(scribeEntry.PublicKey) == 0 {
-		Infof("netconfig: scribe %s has no public key in gossip table — ignoring", snc.ScribeID)
-		return
-	}
-	if err := VerifyNetConfig(snc, scribeEntry.PublicKey); err != nil {
-		Warnf("netconfig: verification failed: %v", err)
-		return
-	}
-	if !n.netCfg.merge(snc) {
-		return // not newer
-	}
-	Warnf("netconfig: v%d applied (%d revoked, %d dns zones, %d node meta)",
-		snc.Config.Version, len(snc.Config.RevokedIDs), len(snc.Config.DNSZones), len(snc.Config.NodeMeta))
-
-	// Overlay node metadata onto gossip table entries.
-	for nodeID, meta := range snc.Config.NodeMeta {
-		if entry, ok := n.table.Get(nodeID); ok {
-			entry.Name = meta.Name
-			entry.Tags = meta.Tags
-			n.table.UpsertForce(entry)
-		}
-	}
-
-	// Sync ACL table from scribe-signed config (only trusted source).
-	for _, acl := range snc.Config.GlobalACLs {
-		n.aclTable.Upsert(acl)
-	}
-
-	// Keep CA in sync with scribe state.
-	if n.ca != nil {
-		n.ca.SyncRevokedIDs(snc.Config.RevokedIDs)
-		n.ca.SyncTokens(snc.Config.JoinTokens)
-	}
-
-	// Propagate to all peers (flood — scribe is authoritative, Version prevents loops).
-	for _, link := range n.registry.All() {
-		if link.IsClosed() {
-			continue
-		}
-		conn, err := link.Open()
-		if err != nil {
-			continue
-		}
-		go func(c net.Conn) {
-			defer c.Close()
-			msg, _ := marshalStreamMsg(streamMsg{Type: "netconfig", NetConfig: &snc})
-			c.Write(msg)
-		}(conn)
-	}
-}
-
-func (n *Node) handleHandshake(msg streamMsg, ac *authedConn) {
-	if msg.NodeID == "" {
-		return
-	}
-	callerID := ac.callerNodeID
-	nodeID := callerID
-	if nodeID == "" {
-		nodeID = msg.NodeID
-	}
-
-	// Verify that the announced nodeID matches the public key.
-	if len(msg.PublicKey) > 0 {
-		expectedID := nodeIDFromKey(msg.PublicKey)
-		if msg.NodeID != expectedID {
-			Warnf("handshake: nodeID %s does not match public key (expected %s) — rejecting", msg.NodeID, expectedID)
-			return
-		}
-	}
-
-	// Reject connections from revoked nodes immediately.
-	if n.netCfg.isRevoked(nodeID) {
-		Warnf("handshake: rejecting revoked node %s", nodeID)
-		return
-	}
-
-	// Network ID isolation: reject peers from different networks.
-	myNet := n.cfg.Node.NetworkID
-	peerNet := msg.NetworkID
-	if myNet != "" && peerNet != "" && myNet != peerNet {
-		Infof("handshake: rejecting node %s from network %q (we are %q)", nodeID, peerNet, myNet)
-		return
-	}
-
-	Infof("handshake: node=%s addr=%s isCA=%v isExit=%v isScribe=%v meshIP=%s",
-		nodeID, msg.Addr, msg.IsCA, msg.IsExit, msg.IsScribe, msg.MeshIP)
-	n.table.Upsert(PeerEntry{
-		NodeID:        nodeID,
-		Addr:          msg.Addr,
-		PublicKey:     msg.PublicKey,
-		IsCA:          msg.IsCA,
-		IsExit:        msg.IsExit,
-		IsScribe:      msg.IsScribe,
-		ScribeAPIAddr: msg.ScribeAPIAddr,
-		MeshIP:        msg.MeshIP,
-		LastSeen:      time.Now(),
-		HopCount:      0,
-	})
-
-	// Register the session in the link registry so the router can use it.
-	// This is the moment we first learn the peer's nodeID, so we register here.
-	if ac.session != nil {
-		n.registry.Add(newPeerLink(nodeID, ac.session))
-		Infof("handshake: registered link to %s", nodeID)
-	}
-
-	// If we're the scribe, immediately push the current NetworkConfig to the
-	// new peer so it doesn't have to wait up to 60s for the next broadcast.
-	// This also covers nodes coming back online after a restart.
-	if n.scribe != nil && ac.session != nil {
-		go n.scribe.PushTo(ac.session)
-	}
-
-	// If TUN is active, immediately rebuild the mesh IP→nodeID map so that
-	// reply packets from this newly-joined peer route correctly without waiting
-	// for the background 5-second refresh tick.
-	if n.tun != nil {
-		n.tun.RefreshMeshIPs()
-		// Initiate a persistent bidirectional pipe if the peer also has TUN.
-		// Lower nodeID initiates to avoid both sides racing to open a pipe.
-		if msg.MeshIP != "" && n.id < nodeID && ac.session != nil {
-			go n.openTunPipe(nodeID, ac.session)
-		}
-	}
-}
-
-// openTunPipe opens a persistent bidirectional yamux stream to the peer for
-// all TUN traffic. One stream handles both directions — no per-packet overhead.
-func (n *Node) openTunPipe(nodeID string, session Session) {
-	conn, err := session.Open()
-	if err != nil {
-		tunLog("open pipe to %s: %v", nodeID, err)
-		return
-	}
-	hdr, _ := marshalStreamMsg(streamMsg{Type: "tunpipe", NodeID: n.id})
-	if _, err := conn.Write(hdr); err != nil {
-		conn.Close()
-		return
-	}
-	n.tun.RunPipe(nodeID, conn)
-}
-
 func (n *Node) gossipLoop(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -907,7 +448,7 @@ func (n *Node) pushGossip() {
 			defer c.Close()
 			msg := streamMsg{Type: "gossip", Entries: entries}
 			line, _ := json.Marshal(msg)
-			c.Write(append(line, '\n'))
+			_, _ = c.Write(append(line, '\n'))
 
 			n.gossipVersionsMu.Lock()
 			n.gossipVersions[peerID] = currentVersion
@@ -937,66 +478,13 @@ func (n *Node) pushStatsToScribe() {
 	go func() {
 		defer conn.Close()
 		stats := NodeStats{
-			NodeID:     n.id,
-			ReportedAt: time.Now(),
-			// TODO: wire up real counters from bridge/tunnel tracking
+			NodeID:      n.id,
+			ReportedAt:  time.Now(),
+			BytesIn:     n.traffic.BytesIn.Load(),
+			BytesOut:    n.traffic.BytesOut.Load(),
+			ActiveConns: int(n.traffic.ActiveConns.Load()),
 		}
 		msg, _ := marshalStreamMsg(streamMsg{Type: "stats", Stats: &stats})
-		conn.Write(msg)
+		_, _ = conn.Write(msg)
 	}()
-}
-
-func (n *Node) serverTLSConfig() *tls.Config {
-	cfg := &tls.Config{
-		// Dynamic cert: picks up renewed certs without restart.
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return &n.identity.TLSCert, nil
-		},
-	}
-	if n.ca != nil {
-		cfg.ClientAuth = tls.RequestClientCert
-		cfg.ClientCAs = n.ca.Pool
-	} else if n.identity.CAPool != nil {
-		cfg.ClientAuth = tls.RequestClientCert
-		cfg.ClientCAs = n.identity.CAPool
-	}
-	return cfg
-}
-
-func (n *Node) clientTLSConfig() *tls.Config {
-	getCert := func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-		return &n.identity.TLSCert, nil
-	}
-	if n.identity.CAPool != nil {
-		cfg := ClientTLSConfig(n.identity.TLSCert, n.identity.CAPool)
-		cfg.GetClientCertificate = getCert
-		return cfg
-	}
-	if n.ca != nil {
-		cfg := ClientTLSConfig(n.identity.TLSCert, n.ca.Pool)
-		cfg.GetClientCertificate = getCert
-		return cfg
-	}
-	return &tls.Config{
-		GetClientCertificate: getCert,
-		InsecureSkipVerify:   true,
-	}
-}
-
-// resolveDNSBootstrap queries _pulse.<domain> TXT records for relay addresses.
-// Records must be formatted as: relay=host:port
-func resolveDNSBootstrap(ctx context.Context, domain string) ([]string, error) {
-	records, err := net.DefaultResolver.LookupTXT(ctx, "_pulse."+domain)
-	if err != nil {
-		return nil, err
-	}
-	var addrs []string
-	for _, rec := range records {
-		for _, field := range strings.Fields(rec) {
-			if after, ok := strings.CutPrefix(field, "relay="); ok {
-				addrs = append(addrs, after)
-			}
-		}
-	}
-	return addrs, nil
 }

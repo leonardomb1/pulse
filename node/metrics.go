@@ -77,6 +77,31 @@ func (s *Scribe) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&b, "pulse_peer_hop_count{%s} %d\n", labels, p.HopCount)
 	}
 
+	// Per-peer link type: "nat", "quic", "websocket", or "none".
+	fmt.Fprintf(&b, "# HELP pulse_peer_link_type Active link type to peer (label).\n")
+	fmt.Fprintf(&b, "# TYPE pulse_peer_link_type gauge\n")
+	for _, p := range peers {
+		if p.NodeID == s.node.id {
+			continue
+		}
+		name := p.Name
+		if name == "" {
+			name = p.NodeID[:8]
+		}
+		linkType := "none"
+		if link, ok := s.node.registry.Get(p.NodeID); ok && !link.IsClosed() {
+			switch {
+			case link.ViaNAT:
+				linkType = "nat"
+			case link.Transport() == "quic":
+				linkType = "quic"
+			default:
+				linkType = "websocket"
+			}
+		}
+		fmt.Fprintf(&b, "pulse_peer_link_type{node_id=%q,name=%q,type=%q} 1\n", p.NodeID, name, linkType)
+	}
+
 	// Node info (constant 1, labels carry metadata).
 	fmt.Fprintf(&b, "# HELP pulse_node_info Node metadata.\n")
 	fmt.Fprintf(&b, "# TYPE pulse_node_info gauge\n")
@@ -153,7 +178,7 @@ func (s *Scribe) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	w.Write([]byte(b.String()))
+	_, _ = w.Write([]byte(b.String()))
 }
 
 // parseLeafCert extracts the leaf x509 certificate from a tls.Certificate.

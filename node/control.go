@@ -190,13 +190,29 @@ func (s *ControlServer) cmdStatus(conn net.Conn) {
 			peers[i].Name = m.Name
 			peers[i].Tags = m.Tags
 		}
+		// Populate link type from the local registry.
+		if link, ok := s.node.registry.Get(peers[i].NodeID); ok && !link.IsClosed() {
+			switch {
+			case link.ViaNAT:
+				peers[i].LinkType = "nat"
+			case link.Transport() == "quic":
+				peers[i].LinkType = "quic"
+			default:
+				peers[i].LinkType = "websocket"
+			}
+		}
 	}
-	s.write(conn, map[string]interface{}{
+	resp := map[string]interface{}{
 		"self":       s.node.id,
 		"peers":      peers,
 		"network_id": s.node.cfg.Node.NetworkID,
 		"mesh_cidr":  s.node.cfg.Tun.CIDR,
-	})
+	}
+	// Include per-node traffic stats when this node is the scribe.
+	if s.node.scribe != nil {
+		resp["stats"] = s.node.scribe.Stats()
+	}
+	s.write(conn, resp)
 }
 
 func (s *ControlServer) cmdDNSList(conn net.Conn) {
@@ -212,7 +228,7 @@ func (s *ControlServer) cmdDNSAdd(conn net.Conn, zone DNSZone) {
 		s.write(conn, ctrlResponse{Error: "this node is not the scribe"})
 		return
 	}
-	if err := s.node.scribe.AddDNSZone(context.Background(), zone); err != nil {
+	if err := s.node.scribe.AddDNSZone(zone); err != nil {
 		s.write(conn, ctrlResponse{Error: err.Error()})
 		return
 	}
@@ -224,7 +240,7 @@ func (s *ControlServer) cmdDNSRemove(conn net.Conn, name, recType string) {
 		s.write(conn, ctrlResponse{Error: "this node is not the scribe"})
 		return
 	}
-	if err := s.node.scribe.RemoveDNSZone(context.Background(), name, recType); err != nil {
+	if err := s.node.scribe.RemoveDNSZone(name, recType); err != nil {
 		s.write(conn, ctrlResponse{Error: err.Error()})
 		return
 	}
@@ -240,7 +256,7 @@ func (s *ControlServer) cmdRouteAdd(conn net.Conn, cidr, via string) {
 		s.write(conn, ctrlResponse{Error: err.Error()})
 		return
 	}
-	s.node.exitRoutes.Save()
+	_ = s.node.exitRoutes.Save()
 	s.write(conn, ctrlResponse{OK: true})
 }
 
@@ -250,7 +266,7 @@ func (s *ControlServer) cmdRouteRemove(conn net.Conn, cidr string) {
 		return
 	}
 	s.node.exitRoutes.Remove(cidr)
-	s.node.exitRoutes.Save()
+	_ = s.node.exitRoutes.Save()
 	s.write(conn, ctrlResponse{OK: true})
 }
 
@@ -268,7 +284,7 @@ func (s *ControlServer) cmdRevoke(conn net.Conn, nodeID string) {
 		s.write(conn, ctrlResponse{Error: "this node is not the scribe"})
 		return
 	}
-	s.node.scribe.Revoke(context.Background(), nodeID)
+	s.node.scribe.Revoke(nodeID)
 	s.write(conn, ctrlResponse{OK: true})
 }
 
@@ -294,7 +310,7 @@ func (s *ControlServer) cmdTokenCreate(conn net.Conn, ttlStr string, maxUses int
 			return
 		}
 	}
-	t := s.node.scribe.CreateToken(context.Background(), ttl, maxUses)
+	t := s.node.scribe.CreateToken(ttl, maxUses)
 	s.write(conn, map[string]interface{}{"token": t})
 }
 
@@ -319,7 +335,7 @@ func (s *ControlServer) cmdTokenRevoke(conn net.Conn, prefix string) {
 		s.write(conn, ctrlResponse{Error: "token_prefix is required"})
 		return
 	}
-	if err := s.node.scribe.RevokeToken(context.Background(), prefix); err != nil {
+	if err := s.node.scribe.RevokeToken(prefix); err != nil {
 		s.write(conn, ctrlResponse{Error: err.Error()})
 		return
 	}
@@ -349,7 +365,7 @@ func (s *ControlServer) cmdACLAdd(conn net.Conn, rule *ACLRule) {
 		s.write(conn, ctrlResponse{Error: "this node is not the scribe"})
 		return
 	}
-	s.node.scribe.AddACLRule(context.Background(), *rule)
+	s.node.scribe.AddACLRule(*rule)
 	s.write(conn, ctrlResponse{OK: true})
 }
 
@@ -358,7 +374,7 @@ func (s *ControlServer) cmdACLRemove(conn net.Conn, index int) {
 		s.write(conn, ctrlResponse{Error: "this node is not the scribe"})
 		return
 	}
-	if err := s.node.scribe.RemoveACLRule(context.Background(), index); err != nil {
+	if err := s.node.scribe.RemoveACLRule(index); err != nil {
 		s.write(conn, ctrlResponse{Error: err.Error()})
 		return
 	}
@@ -374,7 +390,7 @@ func (s *ControlServer) cmdTagAdd(conn net.Conn, nodeID, tag string) {
 		s.write(conn, ctrlResponse{Error: "this node is not the scribe"})
 		return
 	}
-	s.node.scribe.SetTag(context.Background(), nodeID, tag)
+	s.node.scribe.SetTag(nodeID, tag)
 	s.write(conn, ctrlResponse{OK: true})
 }
 
@@ -387,7 +403,7 @@ func (s *ControlServer) cmdTagRemove(conn net.Conn, nodeID, tag string) {
 		s.write(conn, ctrlResponse{Error: "this node is not the scribe"})
 		return
 	}
-	s.node.scribe.RemoveTag(context.Background(), nodeID, tag)
+	s.node.scribe.RemoveTag(nodeID, tag)
 	s.write(conn, ctrlResponse{OK: true})
 }
 
@@ -400,12 +416,12 @@ func (s *ControlServer) cmdNameSet(conn net.Conn, nodeID, name string) {
 		s.write(conn, ctrlResponse{Error: "this node is not the scribe"})
 		return
 	}
-	s.node.scribe.SetName(context.Background(), nodeID, name)
+	s.node.scribe.SetName(nodeID, name)
 	s.write(conn, ctrlResponse{OK: true})
 }
 
 func (s *ControlServer) write(conn net.Conn, v interface{}) {
 	b, _ := json.Marshal(v)
 	b = append(b, '\n')
-	conn.Write(b)
+	_, _ = conn.Write(b)
 }

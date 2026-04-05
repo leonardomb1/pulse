@@ -36,6 +36,7 @@ type App struct {
 	dns       []node.DNSZone
 	routes    []routeEntry
 	acls      []node.ACLRule
+	stats     map[string]node.NodeStats
 }
 
 type routeEntry struct {
@@ -170,9 +171,12 @@ func (a *App) renderCurrentPage() {
 func (a *App) refresh() {
 	// Status
 	if resp, err := ctrlDo(a.socketPath, map[string]string{"cmd": "status"}); err == nil {
-		json.Unmarshal(resp["self"], &a.selfID)
-		json.Unmarshal(resp["peers"], &a.peers)
-		json.Unmarshal(resp["network_id"], &a.networkID)
+		_ = json.Unmarshal(resp["self"], &a.selfID)
+		_ = json.Unmarshal(resp["peers"], &a.peers)
+		_ = json.Unmarshal(resp["network_id"], &a.networkID)
+		if statsRaw, ok := resp["stats"]; ok {
+			_ = json.Unmarshal(statsRaw, &a.stats)
+		}
 	}
 
 	// Check if scribe
@@ -185,17 +189,17 @@ func (a *App) refresh() {
 
 	// DNS
 	if resp, err := ctrlDo(a.socketPath, map[string]string{"cmd": "dns-list"}); err == nil {
-		json.Unmarshal(resp["zones"], &a.dns)
+		_ = json.Unmarshal(resp["zones"], &a.dns)
 	}
 
 	// Routes
 	if resp, err := ctrlDo(a.socketPath, map[string]string{"cmd": "route-list"}); err == nil {
-		json.Unmarshal(resp["routes"], &a.routes)
+		_ = json.Unmarshal(resp["routes"], &a.routes)
 	}
 
 	// ACLs
 	if resp, err := ctrlDo(a.socketPath, map[string]string{"cmd": "acl-list"}); err == nil {
-		json.Unmarshal(resp["rules"], &a.acls)
+		_ = json.Unmarshal(resp["rules"], &a.acls)
 	}
 }
 

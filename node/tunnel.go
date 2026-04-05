@@ -16,7 +16,7 @@ type TunnelRequest struct {
 
 // ServeTCP listens for inbound TCP client connections and relays them.
 // Uses SO_REUSEPORT so the kernel can load-balance across multiple goroutines.
-func ServeTCP(listenAddr string, router *Router, aclTable *ACLTable, selfID string, isRevoked func(string) bool) error {
+func ServeTCP(listenAddr string, router *Router, selfID string, isRevoked func(string) bool, tc *TrafficCounters) error {
 	ln, err := reusePortListen("tcp", listenAddr)
 	if err != nil {
 		return fmt.Errorf("tcp listen %s: %w", listenAddr, err)
@@ -31,11 +31,11 @@ func ServeTCP(listenAddr string, router *Router, aclTable *ACLTable, selfID stri
 		// TCP_NODELAY: critical for SSH/RDP — prevents Nagle's algorithm from
 		// batching small writes and adding up to 200ms of artificial latency.
 		setTCPOpts(conn)
-		go handleClientConn(conn, router, aclTable, selfID, isRevoked)
+		go handleClientConn(conn, router, selfID, isRevoked, tc)
 	}
 }
 
-func handleClientConn(client net.Conn, router *Router, aclTable *ACLTable, selfID string, isRevoked func(string) bool) {
+func handleClientConn(client net.Conn, router *Router, selfID string, isRevoked func(string) bool, tc *TrafficCounters) {
 	defer client.Close()
 
 	reader := bufio.NewReader(client)
@@ -60,7 +60,7 @@ func handleClientConn(client net.Conn, router *Router, aclTable *ACLTable, selfI
 		}
 		defer target.Close()
 		Infof("tunnel: local → %s", req.DestAddr)
-		bridge(reader, client, target)
+		bridgeCounted(reader, client, target, tc)
 		return
 	}
 
@@ -93,12 +93,12 @@ func handleClientConn(client net.Conn, router *Router, aclTable *ACLTable, selfI
 	}
 
 	Infof("tunnel: %s → %s@%s", selfID, req.DestNodeID, req.DestAddr)
-	bridgeStreams(reader, client, stream)
+	bridgeStreamsCounted(reader, client, stream, tc)
 }
 
 // HandleRelayStream is called by the dispatcher when a tunnel stream arrives.
 // callerNodeID is the verified identity of the peer that opened the stream (from TLS CN).
-func HandleRelayStream(stream net.Conn, reader *bufio.Reader, req TunnelRequest, selfID string, callerNodeID string, router *Router, acls *ACLTable, metaLookup MetaLookup) {
+func HandleRelayStream(stream net.Conn, reader *bufio.Reader, req TunnelRequest, selfID string, callerNodeID string, router *Router, acls *ACLTable, metaLookup MetaLookup, tc *TrafficCounters) {
 	defer stream.Close()
 
 	if err := validateDestAddr(req.DestAddr); err != nil {
@@ -122,8 +122,7 @@ func HandleRelayStream(stream net.Conn, reader *bufio.Reader, req TunnelRequest,
 		}
 		defer target.Close()
 		Infof("relay: terminating → %s", req.DestAddr)
-		// target is a raw *net.TCPConn — bridge will use splice if stream is also raw TCP.
-		bridge(reader, stream, target)
+		bridgeCounted(reader, stream, target, tc)
 		return
 	}
 
@@ -158,7 +157,7 @@ func HandleRelayStream(stream net.Conn, reader *bufio.Reader, req TunnelRequest,
 		return
 	}
 
-	bridgeStreams(reader, stream, nextConn)
+	bridgeStreamsCounted(reader, stream, nextConn, tc)
 }
 
 // validateDestAddr checks that addr is a valid host:port and not a restricted IP.

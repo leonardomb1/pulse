@@ -25,7 +25,7 @@ func TestFECEncodeDecodeNoLoss(t *testing.T) {
 			t.Fatal("parity should be ready after 10 packets")
 		}
 	}
-	enc.FlushParity(&buf)
+	_ = enc.FlushParity(&buf)
 
 	// Read back all frames.
 	dec := node.NewFECDecoder()
@@ -48,9 +48,9 @@ func TestFECRecoverSingleLoss(t *testing.T) {
 	packets := make([][]byte, 10)
 	for i := range packets {
 		packets[i] = []byte{byte(i * 10), byte(i*10 + 1), byte(i*10 + 2)}
-		enc.AddAndWrite(&buf, packets[i])
+		_, _ = enc.AddAndWrite(&buf, packets[i])
 	}
-	enc.FlushParity(&buf)
+	_ = enc.FlushParity(&buf)
 
 	// Read all frames, but skip packet index 3 (simulate loss).
 	dec := node.NewFECDecoder()

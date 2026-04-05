@@ -45,9 +45,10 @@ type SOCKSServer struct {
 	exitRoutes *ExitRouteTable
 	selfID     string
 	dnsZones   func() []DNSZone // scribe-distributed zones for CNAME resolution
+	traffic    *TrafficCounters
 }
 
-func NewSOCKSServer(addr string, router *Router, table *Table, exitRoutes *ExitRouteTable, selfID string, dnsZones func() []DNSZone) *SOCKSServer {
+func NewSOCKSServer(addr string, router *Router, table *Table, exitRoutes *ExitRouteTable, selfID string, dnsZones func() []DNSZone, tc *TrafficCounters) *SOCKSServer {
 	return &SOCKSServer{
 		listenAddr: addr,
 		router:     router,
@@ -55,6 +56,7 @@ func NewSOCKSServer(addr string, router *Router, table *Table, exitRoutes *ExitR
 		exitRoutes: exitRoutes,
 		selfID:     selfID,
 		dnsZones:   dnsZones,
+		traffic:    tc,
 	}
 }
 
@@ -95,13 +97,13 @@ func (s *SOCKSServer) handleConn(client net.Conn) {
 	remote, destAddr, _, destNodeID, err := s.resolveDest(host, port)
 	if err != nil {
 		// Send SOCKS5 general failure reply.
-		client.Write([]byte{socks5Ver, socks5RespFail, 0x00, socks5AtypIPv4, 0, 0, 0, 0, 0, 0})
+		_, _ = client.Write([]byte{socks5Ver, socks5RespFail, 0x00, socks5AtypIPv4, 0, 0, 0, 0, 0, 0})
 		Infof("socks5: resolve %s:%d: %v", host, port, err)
 		return
 	}
 
 	// Success reply: bound to 0.0.0.0:0.
-	client.Write([]byte{socks5Ver, socks5RespOK, 0x00, socks5AtypIPv4, 0, 0, 0, 0, 0, 0})
+	_, _ = client.Write([]byte{socks5Ver, socks5RespOK, 0x00, socks5AtypIPv4, 0, 0, 0, 0, 0, 0})
 
 	if remote == nil {
 		// destAddr is a direct TCP address (non-pulse, non-exit-routed).
@@ -112,7 +114,7 @@ func (s *SOCKSServer) handleConn(client net.Conn) {
 		}
 		defer target.Close()
 		setTCPOpts(target)
-		bridgeDirect(client, target)
+		BridgeDirectCounted(client, target, s.traffic)
 		return
 	}
 
@@ -129,9 +131,9 @@ func (s *SOCKSServer) handleConn(client net.Conn) {
 	// (e.g. "localhost:5432" or "postgres:5432").
 	// For exit-routed traffic destAddr is the raw external host:port.
 	hdr, _ := json.Marshal(streamMsg{Type: "tunnel", DestNodeID: destNodeID, DestAddr: destAddr})
-	conn.Write(append(hdr, '\n'))
+	_, _ = conn.Write(append(hdr, '\n'))
 
-	bridgeDirect(client, conn)
+	BridgeDirectCounted(client, conn, s.traffic)
 }
 
 // socks5Handshake performs the RFC 1928 negotiation and returns the requested host:port.
@@ -151,7 +153,7 @@ func (s *SOCKSServer) socks5Handshake(conn net.Conn) (host string, port uint16, 
 		return
 	}
 	// Accept no-auth only.
-	conn.Write([]byte{socks5Ver, socks5NoAuth})
+	_, _ = conn.Write([]byte{socks5Ver, socks5NoAuth})
 
 	// Request.
 	hdr := make([]byte, 4)
@@ -166,17 +168,25 @@ func (s *SOCKSServer) socks5Handshake(conn net.Conn) (host string, port uint16, 
 	switch hdr[3] {
 	case socks5AtypIPv4:
 		addr := make([]byte, 4)
-		io.ReadFull(conn, addr)
+		if _, err = io.ReadFull(conn, addr); err != nil {
+			return
+		}
 		host = net.IP(addr).String()
 	case socks5AtypIPv6:
 		addr := make([]byte, 16)
-		io.ReadFull(conn, addr)
+		if _, err = io.ReadFull(conn, addr); err != nil {
+			return
+		}
 		host = net.IP(addr).String()
 	case socks5AtypFQDN:
 		lenBuf := make([]byte, 1)
-		io.ReadFull(conn, lenBuf)
+		if _, err = io.ReadFull(conn, lenBuf); err != nil {
+			return
+		}
 		fqdn := make([]byte, lenBuf[0])
-		io.ReadFull(conn, fqdn)
+		if _, err = io.ReadFull(conn, fqdn); err != nil {
+			return
+		}
 		host = string(fqdn)
 	default:
 		err = fmt.Errorf("unsupported address type %d", hdr[3])
@@ -302,12 +312,4 @@ func parsePulseDest(host string, port uint16, rawDest string) (nodeID, addr stri
 		addr = net.JoinHostPort(strings.Join(parts[:len(parts)-1], "."), portStr)
 	}
 	return
-}
-
-// bridgeDirect copies between two net.Conn bidirectionally using pooled buffers.
-func bridgeDirect(a, b net.Conn) {
-	done := make(chan struct{}, 2)
-	go func() { copyBuf(b, a); done <- struct{}{} }()
-	go func() { copyBuf(a, b); done <- struct{}{} }()
-	<-done
 }

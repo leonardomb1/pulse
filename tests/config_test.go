@@ -114,7 +114,7 @@ socket = "/tmp/test.sock"
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	os.WriteFile(path, []byte(toml), 0644)
+	_ = os.WriteFile(path, []byte(toml), 0644)
 
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -209,7 +209,7 @@ enabled = true
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	os.WriteFile(path, []byte(toml), 0644)
+	_ = os.WriteFile(path, []byte(toml), 0644)
 
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -253,7 +253,7 @@ port = 6379
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	os.WriteFile(path, []byte(toml), 0644)
+	_ = os.WriteFile(path, []byte(toml), 0644)
 
 	cfg, err := config.Load(path)
 	if err != nil {

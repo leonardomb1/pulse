@@ -16,7 +16,7 @@ func ctrlDo(socketPath string, cmd interface{}) (map[string]json.RawMessage, err
 	defer conn.Close()
 
 	b, _ := json.Marshal(cmd)
-	conn.Write(append(b, '\n'))
+	_, _ = conn.Write(append(b, '\n'))
 
 	var result map[string]json.RawMessage
 	if err := json.NewDecoder(conn).Decode(&result); err != nil {
@@ -24,7 +24,7 @@ func ctrlDo(socketPath string, cmd interface{}) (map[string]json.RawMessage, err
 	}
 	if errMsg, ok := result["error"]; ok {
 		var s string
-		json.Unmarshal(errMsg, &s)
+		_ = json.Unmarshal(errMsg, &s)
 		return nil, fmt.Errorf("%s", s)
 	}
 	return result, nil

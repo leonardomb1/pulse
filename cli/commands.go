@@ -56,11 +56,11 @@ func RunStatus(args []string) {
 	}
 
 	var self string
-	json.Unmarshal(resp["self"], &self)
+	_ = json.Unmarshal(resp["self"], &self)
 	selfMeshIP := node.MeshIPFromNodeID(self)
 
 	var networkID string
-	json.Unmarshal(resp["network_id"], &networkID)
+	_ = json.Unmarshal(resp["network_id"], &networkID)
 	netLabel := ""
 	if networkID != "" {
 		netLabel = fmt.Sprintf(" network: %s", networkID)
@@ -68,14 +68,18 @@ func RunStatus(args []string) {
 	fmt.Printf("Node: %s (mesh: %s)%s\n\n", self, selfMeshIP, netLabel)
 
 	var peers []node.PeerEntry
-	json.Unmarshal(resp["peers"], &peers)
+	_ = json.Unmarshal(resp["peers"], &peers)
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NODE ID\tNAME\tADDR\tMESH IP\tLATENCY\tLOSS%\tHOPS\tROLES\tTAGS\tLAST SEEN")
+	fmt.Fprintln(tw, "NODE ID\tNAME\tADDR\tMESH IP\tLINK\tLATENCY\tLOSS%\tHOPS\tROLES\tTAGS\tLAST SEEN")
 	for _, p := range peers {
 		meshIP := p.MeshIP
 		if meshIP == "" {
 			meshIP = node.MeshIPFromNodeID(p.NodeID).String()
+		}
+		linkType := "-"
+		if p.LinkType != "" {
+			linkType = p.LinkType
 		}
 		latency := "-"
 		if p.LatencyMS > 0 && p.LatencyMS < 1e15 {
@@ -108,8 +112,8 @@ func RunStatus(args []string) {
 		if len(p.Tags) > 0 {
 			tags = strings.Join(p.Tags, ",")
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
-			p.NodeID, name, p.Addr, meshIP, latency, loss, p.HopCount, roles, tags, lastSeen)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+			p.NodeID, name, p.Addr, meshIP, linkType, latency, loss, p.HopCount, roles, tags, lastSeen)
 	}
 	tw.Flush()
 }
@@ -118,7 +122,7 @@ func RunID(args []string) {
 	fs := flag.NewFlagSet("id", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "data directory (default ~/.pulse)")
 	configPath := fs.String("config", "", "path to config.toml")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	dir := ResolveDataDir(*dataDir, *configPath)
 	identity, err := node.LoadOrCreateIdentity(dir)
@@ -133,7 +137,7 @@ func RunCert(args []string) {
 	fs := flag.NewFlagSet("cert", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "data directory (default ~/.pulse)")
 	configPath := fs.String("config", "", "path to config.toml")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	dir := ResolveDataDir(*dataDir, *configPath)
 
@@ -185,7 +189,7 @@ func RunJoin(args []string) {
 	token := fs.String("token", "", "join token (required)")
 	dataDir := fs.String("data-dir", "", "data directory (default ~/.pulse)")
 	configPath := fs.String("config", "", "path to config.toml")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "Usage: pulse join <relay-addr> --token <token>")
@@ -216,7 +220,7 @@ func RunTag(args []string) {
 	fs := flag.NewFlagSet("tag", flag.ExitOnError)
 	sock := fs.String("socket", "", "control socket path")
 	configPath := fs.String("config", "", "path to config.toml")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: pulse tag <node-id> <tag>")
 		os.Exit(1)
@@ -232,7 +236,7 @@ func RunUntag(args []string) {
 	fs := flag.NewFlagSet("untag", flag.ExitOnError)
 	sock := fs.String("socket", "", "control socket path")
 	configPath := fs.String("config", "", "path to config.toml")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: pulse untag <node-id> <tag>")
 		os.Exit(1)
@@ -248,7 +252,7 @@ func RunSetName(args []string) {
 	fs := flag.NewFlagSet("name", flag.ExitOnError)
 	sock := fs.String("socket", "", "control socket path")
 	configPath := fs.String("config", "", "path to config.toml")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: pulse name <node-id> <name>")
 		os.Exit(1)
@@ -273,7 +277,7 @@ func RunACL(args []string) {
 			log.Fatal(err)
 		}
 		var rules []node.ACLRule
-		json.Unmarshal(resp["rules"], &rules)
+		_ = json.Unmarshal(resp["rules"], &rules)
 		if len(rules) == 0 {
 			fmt.Println("no ACL rules (open by default)")
 			return
@@ -302,7 +306,7 @@ func RunACL(args []string) {
 		to := fs.String("to", "*", "destination pattern")
 		ports := fs.String("ports", "", "port ranges (e.g. 22,80,443)")
 		deny := fs.Bool("deny", false, "deny rule (default: allow)")
-		fs.Parse(args[1:])
+		_ = fs.Parse(args[1:])
 		action := "allow"
 		if *deny {
 			action = "deny"
@@ -326,7 +330,7 @@ func RunACL(args []string) {
 		fs := flag.NewFlagSet("acl remove", flag.ExitOnError)
 		sock := fs.String("socket", "", "control socket path")
 		configPath := fs.String("config", "", "path to config.toml")
-		fs.Parse(args[1:])
+		_ = fs.Parse(args[1:])
 		if fs.NArg() < 1 {
 			fmt.Fprintln(os.Stderr, "Usage: pulse acl remove <index>")
 			os.Exit(1)
@@ -352,7 +356,7 @@ func RunRevoke(args []string) {
 	sock := fs.String("socket", "", "control socket path")
 	configPath := fs.String("config", "", "path to config.toml")
 	nodeID := fs.String("node", "", "node ID to revoke (required)")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 	if *nodeID == "" {
 		log.Fatal("--node is required")
 	}
@@ -376,7 +380,7 @@ func RunDNS(args []string) {
 			log.Fatal(err)
 		}
 		var zones []node.DNSZone
-		json.Unmarshal(resp["zones"], &zones)
+		_ = json.Unmarshal(resp["zones"], &zones)
 		if len(zones) == 0 {
 			fmt.Println("no custom DNS records")
 			return
@@ -394,7 +398,7 @@ func RunDNS(args []string) {
 		configPath := fs.String("config", "", "path to config.toml")
 		recType := fs.String("type", "A", "record type (A, CNAME, TXT)")
 		ttl := fs.Int("ttl", 300, "TTL in seconds")
-		fs.Parse(args[1:])
+		_ = fs.Parse(args[1:])
 		if fs.NArg() < 2 {
 			log.Fatal("usage: pulse dns add [--type A] <name> <value>")
 		}
@@ -410,7 +414,7 @@ func RunDNS(args []string) {
 		sock := fs.String("socket", "", "control socket path")
 		configPath := fs.String("config", "", "path to config.toml")
 		recType := fs.String("type", "", "record type (optional)")
-		fs.Parse(args[1:])
+		_ = fs.Parse(args[1:])
 		if fs.NArg() < 1 {
 			log.Fatal("usage: pulse dns remove <name>")
 		}
@@ -442,7 +446,7 @@ func RunRoute(args []string) {
 			CIDR   string `json:"cidr"`
 			NodeID string `json:"node_id"`
 		}
-		json.Unmarshal(resp["routes"], &routes)
+		_ = json.Unmarshal(resp["routes"], &routes)
 		if len(routes) == 0 {
 			fmt.Println("no exit routes configured")
 			return
@@ -458,7 +462,7 @@ func RunRoute(args []string) {
 		fs := flag.NewFlagSet("route add", flag.ExitOnError)
 		sock := fs.String("socket", "", "control socket path")
 		configPath := fs.String("config", "", "path to config.toml")
-		fs.Parse(args[1:])
+		_ = fs.Parse(args[1:])
 		rest := fs.Args()
 		if len(rest) != 3 || rest[1] != "via" {
 			fmt.Fprintln(os.Stderr, "Usage: pulse route add <cidr> via <node-id>")
@@ -474,7 +478,7 @@ func RunRoute(args []string) {
 		fs := flag.NewFlagSet("route remove", flag.ExitOnError)
 		sock := fs.String("socket", "", "control socket path")
 		configPath := fs.String("config", "", "path to config.toml")
-		fs.Parse(args[1:])
+		_ = fs.Parse(args[1:])
 		if fs.NArg() < 1 {
 			fmt.Fprintln(os.Stderr, "Usage: pulse route remove <cidr>")
 			os.Exit(1)
@@ -499,7 +503,7 @@ func RunToken(args []string) {
 			log.Fatal(err)
 		}
 		var token string
-		json.Unmarshal(resp["token"], &token)
+		_ = json.Unmarshal(resp["token"], &token)
 		fmt.Println(token)
 		return
 	}
@@ -511,14 +515,14 @@ func RunToken(args []string) {
 		configPath := fs.String("config", "", "path to config.toml")
 		ttl := fs.String("ttl", "", "token TTL (e.g. 1h, 24h)")
 		maxUses := fs.Int("max-uses", 0, "max uses (0=unlimited)")
-		fs.Parse(args[1:])
+		_ = fs.Parse(args[1:])
 		path := SocketPath([]string{"--socket", *sock, "--config", *configPath})
 		resp, err := CtrlDo(path, map[string]interface{}{"cmd": "token-create", "ttl": *ttl, "max_uses": *maxUses})
 		if err != nil {
 			log.Fatal(err)
 		}
 		var t node.JoinToken
-		json.Unmarshal(resp["token"], &t)
+		_ = json.Unmarshal(resp["token"], &t)
 		fmt.Println(t.Value)
 
 	case "list":
@@ -528,7 +532,7 @@ func RunToken(args []string) {
 			log.Fatal(err)
 		}
 		var tokens []node.JoinToken
-		json.Unmarshal(resp["tokens"], &tokens)
+		_ = json.Unmarshal(resp["tokens"], &tokens)
 		if len(tokens) == 0 {
 			fmt.Println("no tokens (using legacy --token)")
 			return
@@ -559,7 +563,7 @@ func RunToken(args []string) {
 		fs := flag.NewFlagSet("token revoke", flag.ExitOnError)
 		sock := fs.String("socket", "", "control socket path")
 		configPath := fs.String("config", "", "path to config.toml")
-		fs.Parse(args[1:])
+		_ = fs.Parse(args[1:])
 		if fs.NArg() < 1 {
 			fmt.Fprintln(os.Stderr, "Usage: pulse token revoke <prefix>")
 			os.Exit(1)
@@ -581,7 +585,7 @@ func RunConnect(args []string) {
 	pulseAddr := fs.String("pulse", "localhost:7000", "pulse TCP listener address")
 	nodeID := fs.String("node", "", "destination node ID (required)")
 	destAddr := fs.String("dest", "", "destination address on target node (required)")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 	if *nodeID == "" || *destAddr == "" {
 		fmt.Fprintln(os.Stderr, "pulse connect: --node and --dest are required")
 		os.Exit(1)
@@ -598,7 +602,7 @@ func RunConnect(args []string) {
 		for {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
-				conn.Write(buf[:n])
+				_, _ = conn.Write(buf[:n])
 			}
 			if err != nil {
 				break
@@ -628,7 +632,7 @@ func RunForward(args []string) {
 	nodeID := fs.String("node", "", "destination node ID (required)")
 	destAddr := fs.String("dest", "", "destination address on target node (required)")
 	localAddr := fs.String("local", "", "local listen address, e.g. :3389 (required)")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 	if *nodeID == "" || *destAddr == "" || *localAddr == "" {
 		fmt.Fprintln(os.Stderr, "pulse forward: --node, --dest and --local are required")
 		os.Exit(1)
@@ -663,7 +667,7 @@ func RunCASign(args []string) {
 	caDir := fs.String("ca-dir", "", "CA data directory (required)")
 	identityKey := fs.String("identity", "", "path to node's identity.key (required)")
 	outDir := fs.String("out", ".", "directory to write identity.crt and ca.crt")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 	if *caDir == "" || *identityKey == "" {
 		log.Fatal("--ca-dir and --identity are required")
 	}
@@ -686,7 +690,7 @@ func RunCALog(args []string) {
 	configPath := fs.String("config", "", "path to config.toml")
 	sinceStr := fs.String("since", "", "show entries at or after this time (RFC3339)")
 	nodeFilter := fs.String("node", "", "filter by node ID")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
@@ -734,7 +738,7 @@ func RunSetup(args []string) {
 func RunSetupDNS(args []string) {
 	fs := flag.NewFlagSet("setup dns", flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.toml")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
@@ -756,7 +760,7 @@ func RunSetupDNS(args []string) {
 	proc, _ := os.StartProcess("/usr/bin/systemctl", []string{"systemctl", "restart", "systemd-resolved"},
 		&os.ProcAttr{Files: []*os.File{os.Stdin, os.Stdout, os.Stderr}})
 	if proc != nil {
-		proc.Wait()
+		_, _ = proc.Wait()
 	}
 	fmt.Println("ok")
 }

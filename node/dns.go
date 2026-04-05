@@ -52,8 +52,8 @@ func (d *DNSServer) ListenAndServe(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		udp.ShutdownContext(ctx)
-		tcp.ShutdownContext(ctx)
+		_ = udp.ShutdownContext(ctx)
+		_ = tcp.ShutdownContext(ctx)
 		return nil
 	case err := <-errc:
 		return err
@@ -68,7 +68,7 @@ func (d *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	if len(r.Question) == 0 {
 		m.SetRcode(r, dns.RcodeRefused)
-		w.WriteMsg(m)
+		_ = w.WriteMsg(m)
 		return
 	}
 
@@ -104,7 +104,7 @@ func (d *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	case dns.TypeSRV:
 		if service == "" {
 			m.SetRcode(r, dns.RcodeNameError)
-			w.WriteMsg(m)
+			_ = w.WriteMsg(m)
 			return
 		}
 		for _, svc := range entry.Services {
@@ -137,7 +137,7 @@ func (d *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		// NOERROR, empty answer for unknown types.
 	}
 
-	w.WriteMsg(m)
+	_ = w.WriteMsg(m)
 }
 
 // serveExtraZones handles DNS zones distributed by the scribe (non-.pulse names).
@@ -148,7 +148,7 @@ func (d *DNSServer) serveExtraZones(w dns.ResponseWriter, r *dns.Msg) {
 
 	if len(r.Question) == 0 || d.extraZones == nil {
 		m.SetRcode(r, dns.RcodeRefused)
-		w.WriteMsg(m)
+		_ = w.WriteMsg(m)
 		return
 	}
 
@@ -189,7 +189,7 @@ func (d *DNSServer) serveExtraZones(w dns.ResponseWriter, r *dns.Msg) {
 			if strings.HasSuffix(strings.TrimSuffix(zone.Value, "."), ".pulse") {
 				targetNodeID, _ := d.parseName(strings.ToLower(dns.Fqdn(zone.Value)))
 				if entry, ok := d.table.Get(targetNodeID); ok {
-					targetIP := d.nodeAddr(entry)
+					targetIP := d.resolveNodeIP(entry)
 					if targetIP != nil {
 						m.Answer = append(m.Answer, &dns.A{
 							Hdr: dns.RR_Header{Name: target, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ttl},
@@ -204,16 +204,7 @@ func (d *DNSServer) serveExtraZones(w dns.ResponseWriter, r *dns.Msg) {
 	if len(m.Answer) == 0 {
 		m.SetRcode(r, dns.RcodeNameError)
 	}
-	w.WriteMsg(m)
-}
-
-// nodeAddr extracts the IP address from a gossip PeerEntry's Addr field.
-func (d *DNSServer) nodeAddr(entry PeerEntry) net.IP {
-	host, _, err := net.SplitHostPort(entry.Addr)
-	if err != nil {
-		return nil
-	}
-	return net.ParseIP(host)
+	_ = w.WriteMsg(m)
 }
 
 // resolveNodeIP returns the IP address to advertise for a node in DNS.

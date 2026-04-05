@@ -27,6 +27,11 @@ jobs:
           gofmt -s -l . | tee /tmp/gofmt.out
           test ! -s /tmp/gofmt.out || (echo "files not formatted" && exit 1)
 
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
   test-unit:
     runs-on: ubuntu-latest
     needs: build

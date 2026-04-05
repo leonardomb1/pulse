@@ -15,7 +15,10 @@ func (a *App) renderNodes() {
 	t := a.nodesTable
 	t.Clear()
 
-	headers := []string{"NODE ID", "NAME", "MESH IP", "ADDR", "LATENCY", "LOSS", "HOPS", "ROLES", "TAGS", "LAST SEEN"}
+	headers := []string{"NODE ID", "NAME", "MESH IP", "ADDR", "LINK", "LATENCY", "LOSS", "HOPS", "ROLES", "TAGS", "LAST SEEN"}
+	if a.isScribe {
+		headers = append(headers, "TX", "RX", "CONNS")
+	}
 	for i, h := range headers {
 		t.SetCell(0, i, headerCell(h))
 	}
@@ -39,6 +42,11 @@ func (a *App) renderNodes() {
 			name = "-"
 		}
 
+		linkType := "-"
+		if p.LinkType != "" {
+			linkType = p.LinkType
+		}
+
 		latency := "-"
 		if p.LatencyMS > 0 && p.LatencyMS < 1e15 {
 			latency = fmt.Sprintf("%.1fms", p.LatencyMS)
@@ -59,24 +67,77 @@ func (a *App) renderNodes() {
 		}
 
 		cellFn := dataCell
+		linkCellFn := cellFn
 		if isSelf {
 			cellFn = func(text string) *tview.TableCell {
 				return tview.NewTableCell(text).
 					SetTextColor(tcell.ColorGreen).
 					SetExpansion(1)
 			}
+			linkCellFn = cellFn
+		} else {
+			switch linkType {
+			case "nat":
+				linkCellFn = func(text string) *tview.TableCell {
+					return tview.NewTableCell(text).
+						SetTextColor(tcell.ColorLimeGreen).
+						SetExpansion(1)
+				}
+			case "quic":
+				linkCellFn = func(text string) *tview.TableCell {
+					return tview.NewTableCell(text).
+						SetTextColor(tcell.ColorAqua).
+						SetExpansion(1)
+				}
+			case "websocket":
+				linkCellFn = func(text string) *tview.TableCell {
+					return tview.NewTableCell(text).
+						SetTextColor(tcell.ColorYellow).
+						SetExpansion(1)
+				}
+			}
 		}
 
-		t.SetCell(row, 0, cellFn(id))
-		t.SetCell(row, 1, cellFn(name))
-		t.SetCell(row, 2, cellFn(meshIP))
-		t.SetCell(row, 3, cellFn(p.Addr))
-		t.SetCell(row, 4, cellFn(latency))
-		t.SetCell(row, 5, cellFn(loss))
-		t.SetCell(row, 6, cellFn(fmt.Sprint(p.HopCount)))
-		t.SetCell(row, 7, cellFn(roles))
-		t.SetCell(row, 8, cellFn(tags))
-		t.SetCell(row, 9, dimCell(lastSeen))
+		col := 0
+		set := func(c *tview.TableCell) { t.SetCell(row, col, c); col++ }
+
+		set(cellFn(id))
+		set(cellFn(name))
+		set(cellFn(meshIP))
+		set(cellFn(p.Addr))
+		set(linkCellFn(linkType))
+		set(cellFn(latency))
+		set(cellFn(loss))
+		set(cellFn(fmt.Sprint(p.HopCount)))
+		set(cellFn(roles))
+		set(cellFn(tags))
+		set(dimCell(lastSeen))
+
+		if a.isScribe {
+			if st, ok := a.stats[p.NodeID]; ok {
+				set(cellFn(formatBytes(st.BytesOut)))
+				set(cellFn(formatBytes(st.BytesIn)))
+				set(cellFn(fmt.Sprint(st.ActiveConns)))
+			} else {
+				set(dimCell("-"))
+				set(dimCell("-"))
+				set(dimCell("-"))
+			}
+		}
+	}
+}
+
+// formatBytes returns a human-readable byte count (e.g. "1.2 MB").
+func formatBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(b)/(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(b)/(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(b)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
 	}
 }
 
@@ -94,21 +155,21 @@ func (a *App) handleNodesKey(event *tcell.EventKey) *tcell.EventKey {
 	switch event.Rune() {
 	case 't': // tag
 		a.showInputModal("Tag node "+peer.NodeID[:8], "Tag:", func(tag string) {
-			ctrlDo(a.socketPath, map[string]string{"cmd": "tag-add", "node_id": peer.NodeID, "tag": tag})
+			_, _ = ctrlDo(a.socketPath, map[string]string{"cmd": "tag-add", "node_id": peer.NodeID, "tag": tag})
 			a.refresh()
 			a.app.QueueUpdateDraw(func() { a.renderCurrentPage() })
 		})
 		return nil
 	case 'n': // name
 		a.showInputModal("Name node "+peer.NodeID[:8], "Name:", func(name string) {
-			ctrlDo(a.socketPath, map[string]string{"cmd": "name-set", "node_id": peer.NodeID, "name": name})
+			_, _ = ctrlDo(a.socketPath, map[string]string{"cmd": "name-set", "node_id": peer.NodeID, "name": name})
 			a.refresh()
 			a.app.QueueUpdateDraw(func() { a.renderCurrentPage() })
 		})
 		return nil
 	case 'r': // revoke
 		a.showConfirmModal("Revoke node "+peer.NodeID+"?", func() {
-			ctrlDo(a.socketPath, map[string]string{"cmd": "revoke", "node_id": peer.NodeID})
+			_, _ = ctrlDo(a.socketPath, map[string]string{"cmd": "revoke", "node_id": peer.NodeID})
 			a.refresh()
 			a.app.QueueUpdateDraw(func() { a.renderCurrentPage() })
 		})

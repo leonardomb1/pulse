@@ -55,8 +55,8 @@ func (a *AuditLog) Write(e AuditEntry) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.f.Write(b)
-	a.f.Write([]byte{'\n'})
+	_, _ = a.f.Write(b)
+	_, _ = a.f.Write([]byte{'\n'})
 	return a.f.Sync()
 }
 

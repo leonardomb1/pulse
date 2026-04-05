@@ -33,7 +33,7 @@ func (t *JoinToken) IsValid() bool {
 // GenerateToken creates a new random join token.
 func GenerateToken(ttl time.Duration, maxUses int) JoinToken {
 	b := make([]byte, 32)
-	rand.Read(b)
+	_, _ = rand.Read(b)
 	t := JoinToken{
 		Value:     hex.EncodeToString(b),
 		CreatedAt: time.Now(),

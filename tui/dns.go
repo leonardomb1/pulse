@@ -47,7 +47,7 @@ func (a *App) handleDNSKey(event *tcell.EventKey) *tcell.EventKey {
 		if idx >= 0 && idx < len(a.dns) {
 			z := a.dns[idx]
 			a.showConfirmModal(fmt.Sprintf("Delete DNS record %s %s?", z.Name, z.Type), func() {
-				ctrlDo(a.socketPath, map[string]string{"cmd": "dns-remove", "name": z.Name, "type": z.Type})
+				_, _ = ctrlDo(a.socketPath, map[string]string{"cmd": "dns-remove", "name": z.Name, "type": z.Type})
 				a.refresh()
 				a.app.QueueUpdateDraw(func() { a.renderCurrentPage() })
 			})
@@ -75,11 +75,11 @@ func (a *App) showDNSAddForm() {
 			return
 		}
 		var ttlVal uint32 = 300
-		fmt.Sscanf(ttl, "%d", &ttlVal)
+		_, _ = fmt.Sscanf(ttl, "%d", &ttlVal)
 
 		go func() {
 			zone := node.DNSZone{Name: name, Type: recType, Value: value, TTL: ttlVal}
-			ctrlDo(a.socketPath, map[string]interface{}{"cmd": "dns-add", "zone": zone})
+			_, _ = ctrlDo(a.socketPath, map[string]interface{}{"cmd": "dns-add", "zone": zone})
 			a.refresh()
 			a.app.QueueUpdateDraw(func() { a.renderCurrentPage() })
 		}()

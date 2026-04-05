@@ -18,10 +18,10 @@ func TestAuditLogWriteAndRead(t *testing.T) {
 	defer al.Close()
 
 	// Write entries.
-	al.Write(node.AuditEntry{Op: node.AuditJoinAttempted, NodeID: "node1"})
-	al.Write(node.AuditEntry{Op: node.AuditCertIssued, NodeID: "node1"})
-	al.Write(node.AuditEntry{Op: node.AuditJoinFailed, NodeID: "node2", Error: "bad token"})
-	al.Write(node.AuditEntry{Op: node.AuditCertRevoked, NodeID: "node3"})
+	_ = al.Write(node.AuditEntry{Op: node.AuditJoinAttempted, NodeID: "node1"})
+	_ = al.Write(node.AuditEntry{Op: node.AuditCertIssued, NodeID: "node1"})
+	_ = al.Write(node.AuditEntry{Op: node.AuditJoinFailed, NodeID: "node2", Error: "bad token"})
+	_ = al.Write(node.AuditEntry{Op: node.AuditCertRevoked, NodeID: "node3"})
 
 	// ReadAll.
 	entries, err := al.ReadAll()

@@ -29,7 +29,7 @@ func ParsePortRanges(s string) ([]PortRange, error) {
 		return nil, nil
 	}
 	var out []PortRange
-	for _, part := range strings.Split(s, ",") {
+	for part := range strings.SplitSeq(s, ",") {
 		part = strings.TrimSpace(part)
 		if lo, hi, ok := strings.Cut(part, "-"); ok {
 			low, err := strconv.ParseUint(lo, 10, 16)

@@ -40,10 +40,15 @@ func (y *yamuxSession) Transport() string         { return "websocket+yamux" }
 type PeerLink struct {
 	NodeID  string
 	session Session
+	ViaNAT  bool // true if established via NAT hole punch
 }
 
 func newPeerLink(nodeID string, s Session) *PeerLink {
 	return &PeerLink{NodeID: nodeID, session: s}
+}
+
+func newNATPeerLink(nodeID string, s Session) *PeerLink {
+	return &PeerLink{NodeID: nodeID, session: s, ViaNAT: true}
 }
 
 func (p *PeerLink) Open() (net.Conn, error) { return p.session.Open() }

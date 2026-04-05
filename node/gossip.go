@@ -25,6 +25,11 @@ type PeerEntry struct {
 	LatencyMS float64 `json:"latency_ms,omitempty"`
 	LossRate  float64 `json:"loss_rate,omitempty"`
 
+	// Link type — populated locally from LinkRegistry, not gossipped.
+	// Values: "nat" (direct P2P via hole punch), "quic" (direct QUIC),
+	// "websocket" (relay via websocket+yamux), "" (no active session).
+	LinkType string `json:"link_type,omitempty"`
+
 	// NAT hole punching.
 	PublicAddr string `json:"public_addr,omitempty"`
 

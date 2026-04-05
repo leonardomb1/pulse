@@ -68,7 +68,7 @@ func (a *App) handleACLsKey(event *tcell.EventKey) *tcell.EventKey {
 				action = "allow"
 			}
 			a.showConfirmModal(fmt.Sprintf("Remove ACL rule #%d (%s %s→%s)?", idx, action, r.SrcPattern, r.DstPattern), func() {
-				ctrlDo(a.socketPath, map[string]interface{}{"cmd": "acl-remove", "index": idx})
+				_, _ = ctrlDo(a.socketPath, map[string]interface{}{"cmd": "acl-remove", "index": idx})
 				a.refresh()
 				a.app.QueueUpdateDraw(func() { a.renderCurrentPage() })
 			})
@@ -100,7 +100,7 @@ func (a *App) showACLAddForm() {
 				DstPattern: to,
 				Ports:      ports,
 			}
-			ctrlDo(a.socketPath, map[string]interface{}{"cmd": "acl-add", "acl_rule": rule})
+			_, _ = ctrlDo(a.socketPath, map[string]interface{}{"cmd": "acl-add", "acl_rule": rule})
 			a.refresh()
 			a.app.QueueUpdateDraw(func() { a.renderCurrentPage() })
 		}()

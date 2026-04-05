@@ -49,7 +49,7 @@ func buildImage(t *testing.T) {
 
 func createNetwork(t *testing.T) {
 	t.Helper()
-	docker("network", "rm", testNetwork)
+	_, _ = docker("network", "rm", testNetwork)
 	if _, err := docker("network", "create", "--subnet", testSubnet, testNetwork); err != nil {
 		t.Fatalf("create network: %v", err)
 	}
@@ -57,7 +57,7 @@ func createNetwork(t *testing.T) {
 
 func startContainer(t *testing.T, name, ip string, args ...string) {
 	t.Helper()
-	docker("rm", "-f", name)
+	_, _ = docker("rm", "-f", name)
 	full := []string{
 		"run", "-d",
 		"--name", name,
@@ -89,9 +89,9 @@ func waitForSocket(t *testing.T, container string, timeout time.Duration) {
 
 func cleanup(names ...string) {
 	for _, n := range names {
-		docker("rm", "-f", n)
+		_, _ = docker("rm", "-f", n)
 	}
-	docker("network", "rm", testNetwork)
+	_, _ = docker("network", "rm", testNetwork)
 }
 
 func extractMeshIP(t *testing.T, container string) string {
@@ -242,12 +242,12 @@ func TestDockerMeshSetup(t *testing.T) {
 		}
 
 		// Cleanup.
-		dockerExec("pulse-ca", "pulse", "acl", "remove", "0")
+		_, _ = dockerExec("pulse-ca", "pulse", "acl", "remove", "0")
 	})
 
 	t.Run("DNS resolution", func(t *testing.T) {
 		// Add a DNS record.
-		dockerExec("pulse-ca", "pulse", "dns", "add", "--type", "A", "myservice.pulse", "10.0.0.99")
+		_, _ = dockerExec("pulse-ca", "pulse", "dns", "add", "--type", "A", "myservice.pulse", "10.0.0.99")
 
 		time.Sleep(2 * time.Second)
 
@@ -260,7 +260,7 @@ func TestDockerMeshSetup(t *testing.T) {
 			t.Errorf("DNS didn't resolve:\n%s", out)
 		}
 
-		dockerExec("pulse-ca", "pulse", "dns", "remove", "myservice.pulse")
+		_, _ = dockerExec("pulse-ca", "pulse", "dns", "remove", "myservice.pulse")
 	})
 
 	t.Run("Token create and list", func(t *testing.T) {
@@ -279,7 +279,7 @@ func TestDockerMeshSetup(t *testing.T) {
 		}
 
 		// Revoke.
-		dockerExec("pulse-ca", "pulse", "token", "revoke", tokenValue[:8])
+		_, _ = dockerExec("pulse-ca", "pulse", "token", "revoke", tokenValue[:8])
 		out, _ = dockerExec("pulse-ca", "pulse", "token", "list")
 		if strings.Contains(out, "valid") {
 			t.Errorf("token should be revoked:\n%s", out)
@@ -307,7 +307,7 @@ func TestDockerMeshSetup(t *testing.T) {
 			"--network", "different-net",
 			"--log-level", "warn",
 		)
-		defer docker("rm", "-f", "pulse-outsider")
+		defer func() { _, _ = docker("rm", "-f", "pulse-outsider") }()
 
 		time.Sleep(10 * time.Second)
 

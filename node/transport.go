@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
-	"nhooyr.io/websocket"
 )
 
 // wsConn wraps a websocket.Conn as a net.Conn for yamux.
@@ -141,9 +141,9 @@ func setTCPOpts(conn net.Conn) {
 	if !ok {
 		return
 	}
-	tc.SetNoDelay(true)
-	tc.SetKeepAlive(true)
-	tc.SetKeepAlivePeriod(30 * time.Second)
+	_ = tc.SetNoDelay(true)
+	_ = tc.SetKeepAlive(true)
+	_ = tc.SetKeepAlivePeriod(30 * time.Second)
 }
 
 // dialPeer dials a peer relay over WSS and returns a Session.

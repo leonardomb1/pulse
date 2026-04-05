@@ -8,9 +8,9 @@ import (
 
 func TestExitRouteLookup(t *testing.T) {
 	tbl := node.NewExitRouteTable("/dev/null")
-	tbl.Add("10.0.0.0/8", "node-a")
-	tbl.Add("10.1.0.0/16", "node-b")
-	tbl.Add("0.0.0.0/0", "node-c")
+	_ = tbl.Add("10.0.0.0/8", "node-a")
+	_ = tbl.Add("10.1.0.0/16", "node-b")
+	_ = tbl.Add("0.0.0.0/0", "node-c")
 
 	tests := []struct {
 		ip   string
@@ -31,14 +31,14 @@ func TestExitRouteLookup(t *testing.T) {
 
 func TestExitRouteAddRemove(t *testing.T) {
 	tbl := node.NewExitRouteTable("/dev/null")
-	tbl.Add("10.0.0.0/8", "node-a")
+	_ = tbl.Add("10.0.0.0/8", "node-a")
 
 	snap := tbl.Snapshot()
 	if len(snap) != 1 {
 		t.Fatalf("expected 1 route, got %d", len(snap))
 	}
 
-	tbl.Add("10.0.0.0/8", "node-b")
+	_ = tbl.Add("10.0.0.0/8", "node-b")
 	snap = tbl.Snapshot()
 	if len(snap) != 1 || snap[0].NodeID != "node-b" {
 		t.Fatalf("upsert failed: %+v", snap)
@@ -52,7 +52,7 @@ func TestExitRouteAddRemove(t *testing.T) {
 
 func TestSyncFromGossip(t *testing.T) {
 	tbl := node.NewExitRouteTable("/dev/null")
-	tbl.Add("192.168.0.0/16", "manual-node")
+	_ = tbl.Add("192.168.0.0/16", "manual-node")
 
 	tbl.SyncFromGossip([]node.PeerEntry{
 		{NodeID: "exit1", ExitCIDRs: []string{"0.0.0.0/0"}},

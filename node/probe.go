@@ -205,7 +205,7 @@ func (p *Prober) probePeer(link *PeerLink) (time.Duration, error) {
 		return 0, err
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(probeTimeout))
+	_ = conn.SetDeadline(time.Now().Add(probeTimeout))
 
 	sentAt := time.Now()
 	msg, _ := json.Marshal(streamMsg{Type: "probe", SentAt: sentAt})

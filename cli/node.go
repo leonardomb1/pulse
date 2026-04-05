@@ -131,7 +131,7 @@ func RunNode(args []string) {
 		scribeEnabled, scribeListen,
 		exitEnabled := NodeFlags(fs)
 	logLevelFlag := fs.String("log-level", "", "log level: debug, info, warn, error (default: info)")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -149,9 +149,7 @@ func RunNode(args []string) {
 		node.SetLogLevel(node.ParseLogLevel(ll))
 	}
 
-	for _, peer := range fs.Args() {
-		cfg.Bootstrap.Peers = append(cfg.Bootstrap.Peers, peer)
-	}
+	cfg.Bootstrap.Peers = append(cfg.Bootstrap.Peers, fs.Args()...)
 
 	// Join flow (first-time bootstrap).
 	addr := cfg.Join.RelayAddr

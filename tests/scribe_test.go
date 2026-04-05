@@ -17,28 +17,28 @@ func TestScribePersistence(t *testing.T) {
 	defer cleanup()
 
 	// Add DNS zone.
-	cli.CtrlDo(sock, map[string]interface{}{
+	_, _ = cli.CtrlDo(sock, map[string]interface{}{
 		"cmd":  "dns-add",
 		"zone": map[string]interface{}{"name": "test.pulse", "type": "A", "value": "10.0.0.1", "ttl": 60},
 	})
 
 	// Add ACL rule.
-	cli.CtrlDo(sock, map[string]interface{}{
+	_, _ = cli.CtrlDo(sock, map[string]interface{}{
 		"cmd":      "acl-add",
 		"acl_rule": map[string]interface{}{"action": "deny", "src_pat": "tag:x", "dst_pat": "*"},
 	})
 
 	// Create token.
-	cli.CtrlDo(sock, map[string]interface{}{
+	_, _ = cli.CtrlDo(sock, map[string]interface{}{
 		"cmd": "token-create", "ttl": "1h", "max_uses": 1,
 	})
 
 	// Get self ID and tag it.
 	resp, _ := cli.CtrlDo(sock, map[string]string{"cmd": "status"})
 	var selfID string
-	json.Unmarshal(resp["self"], &selfID)
-	cli.CtrlDo(sock, map[string]string{"cmd": "tag-add", "node_id": selfID, "tag": "test"})
-	cli.CtrlDo(sock, map[string]string{"cmd": "name-set", "node_id": selfID, "name": "mynode"})
+	_ = json.Unmarshal(resp["self"], &selfID)
+	_, _ = cli.CtrlDo(sock, map[string]string{"cmd": "tag-add", "node_id": selfID, "tag": "test"})
+	_, _ = cli.CtrlDo(sock, map[string]string{"cmd": "name-set", "node_id": selfID, "name": "mynode"})
 
 	time.Sleep(1 * time.Second)
 
@@ -96,7 +96,7 @@ func TestScribeNonScribeRejectsAllMutations(t *testing.T) {
 	n, _ := node.New(cfg, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { n.Run(ctx); close(done) }()
+	go func() { _ = n.Run(ctx); close(done) }()
 	defer func() { cancel(); <-done }()
 
 	deadline := time.Now().Add(5 * time.Second)

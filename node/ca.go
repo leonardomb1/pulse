@@ -252,7 +252,7 @@ func (ca *CA) SyncRevokedIDs(ids []string) {
 
 func (ca *CA) audit(e AuditEntry) {
 	if ca.Audit != nil {
-		ca.Audit.Write(e)
+		_ = ca.Audit.Write(e)
 	}
 }
 
