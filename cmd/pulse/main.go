@@ -1,10 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/leonardomb1/pulse/cli"
 )
+
+// Set by -ldflags at build time.
+var version = "dev"
 
 func main() {
 	if len(os.Args) > 1 {
@@ -65,6 +69,9 @@ func main() {
 			return
 		case "setup":
 			cli.RunSetup(os.Args[2:])
+			return
+		case "version", "--version", "-v":
+			fmt.Println("pulse " + version)
 			return
 		case "help", "--help", "-h":
 			cli.PrintUsage()
