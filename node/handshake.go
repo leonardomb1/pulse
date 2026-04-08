@@ -164,6 +164,12 @@ func (n *Node) dispatchStream(ac *authedConn) {
 		}
 		HandleRelayStream(ac.Conn, reader, req, n.id, callerID, n.router, n.aclTable, n.netCfg.nodeMeta, &n.traffic)
 
+	case "nodestate":
+		if msg.NodeState != nil {
+			n.applyNodeState(*msg.NodeState)
+		}
+		ac.Close()
+
 	case "remote_cmd":
 		n.handleRemoteCmd(msg)
 		ac.Close()
@@ -299,6 +305,11 @@ func (n *Node) handleHandshake(msg streamMsg, ac *authedConn) {
 	// This also covers nodes coming back online after a restart.
 	if n.scribe != nil && ac.session != nil {
 		go n.scribe.PushTo(ac.session)
+		// Also push per-node config (from templates or manual assignment).
+		go func() {
+			cfg := n.scribe.BuildNodeConfigForPeer(nodeID)
+			n.scribe.PushNodeConfig(nodeID, cfg)
+		}()
 	}
 
 	// If TUN is active, immediately rebuild the mesh IP→nodeID map so that

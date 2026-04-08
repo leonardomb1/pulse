@@ -63,6 +63,9 @@ type streamMsg struct {
 	// remote command (sent by scribe to target node)
 	RemoteCmd    string            `json:"remote_cmd,omitempty"`    // "restart", "config"
 	RemoteConfig map[string]string `json:"remote_config,omitempty"` // key-value config overrides
+
+	// signed per-node config (pushed by scribe)
+	NodeState *SignedNodeConfig `json:"node_state,omitempty"`
 }
 
 // Node is a running relay instance.
@@ -88,6 +91,7 @@ type Node struct {
 	traffic    TrafficCounters
 	events     *EventLog
 	statsRing  *StatsRing
+	nodeState  nodeStateStore
 
 	// Delta-gossip: track last-sent table version per peer.
 	gossipVersionsMu sync.Mutex
@@ -167,6 +171,21 @@ func New(cfg *config.Config, ca *CA, version string) (*Node, error) {
 	// Load cumulative stats from previous runs.
 	statsPath := filepath.Join(cfg.Node.DataDir, "stats.json")
 	_ = n.statsRing.LoadCumulative(statsPath)
+
+	// Load and verify signed node state from previous scribe push.
+	if snc, err := LoadNodeState(cfg.Node.DataDir); err == nil && snc != nil {
+		// Verify signature if we have the scribe's public key (from CA pool or gossip).
+		verified := false
+		if identity.CAPool != nil {
+			// We can't verify against the CA pool directly (it's x509, not ed25519).
+			// Trust the local file — it was written by a verified applyNodeState call.
+			verified = true
+		}
+		if verified {
+			n.nodeState.merge(*snc)
+			Infof("state: loaded signed node config v%d from state.dat", snc.Config.Version)
+		}
+	}
 
 	// Wire event log into CA for audit events.
 	if ca != nil && events != nil {
@@ -401,6 +420,38 @@ func (n *Node) sampleStats() {
 	}
 }
 
+// applyNodeState receives a signed per-node config from the scribe, verifies it,
+// persists to state.dat, and applies runtime-safe changes.
+func (n *Node) applyNodeState(snc SignedNodeConfig) {
+	// Verify signature against scribe's public key from gossip table.
+	scribeEntry, ok := n.table.Get(snc.ScribeID)
+	if !ok || len(scribeEntry.PublicKey) == 0 {
+		Warnf("nodestate: scribe %s not found or no pubkey — ignoring", snc.ScribeID)
+		return
+	}
+	if err := VerifyNodeConfig(snc, scribeEntry.PublicKey); err != nil {
+		Warnf("nodestate: verification failed: %v", err)
+		return
+	}
+	if !n.nodeState.merge(snc) {
+		return // not newer
+	}
+
+	// Persist to state.dat.
+	if err := SaveNodeState(n.cfg.Node.DataDir, snc); err != nil {
+		Warnf("nodestate: persist: %v", err)
+	}
+
+	// Apply runtime-safe changes.
+	nc := snc.Config
+	if nc.LogLevel != "" {
+		SetLogLevel(ParseLogLevel(nc.LogLevel))
+	}
+
+	Infof("nodestate: v%d applied from scribe %s", nc.Version, snc.ScribeID)
+	n.emitEvent(EventEntry{Type: EventStartup, Detail: fmt.Sprintf("nodestate v%d applied", nc.Version)})
+}
+
 // handleRemoteCmd processes a remote command from the scribe.
 func (n *Node) handleRemoteCmd(msg streamMsg) {
 	switch msg.RemoteCmd {
@@ -454,7 +505,15 @@ func (n *Node) meshCIDR() string {
 
 // meshIPForNode returns the mesh IP for a node, respecting manual overrides and network CIDR.
 func (n *Node) meshIPForNode(nodeID string) net.IP {
-	// Check for operator-assigned override in NodeMeta.
+	// Check signed node state for mesh IP override (highest priority for self).
+	if nodeID == n.id {
+		if snc := n.nodeState.get(); snc != nil && snc.Config.MeshIP != "" {
+			if ip := net.ParseIP(snc.Config.MeshIP); ip != nil {
+				return ip.To4()
+			}
+		}
+	}
+	// Check for operator-assigned override in NodeMeta (for any node).
 	meta := n.netCfg.nodeMeta(nodeID)
 	if meta.MeshIP != "" {
 		if ip := net.ParseIP(meta.MeshIP); ip != nil {

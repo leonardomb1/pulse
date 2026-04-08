@@ -41,17 +41,19 @@ type Scribe struct {
 	globalACLs  []NodeACL
 	nodeMeta    map[string]NodeMeta
 	tokens      []JoinToken
+	templates   map[string]NodeConfig // tag pattern → config template
 	version     int64
 	persistPath string // path to netconfig.json
 }
 
 // scribeState is the on-disk representation of scribe state.
 type scribeState struct {
-	RevokedIDs []string            `json:"revoked_ids"`
-	DNSZones   []DNSZone           `json:"dns_zones"`
-	GlobalACLs []NodeACL           `json:"global_acls"`
-	NodeMeta   map[string]NodeMeta `json:"node_meta,omitempty"`
-	Tokens     []JoinToken         `json:"tokens,omitempty"`
+	RevokedIDs []string              `json:"revoked_ids"`
+	DNSZones   []DNSZone             `json:"dns_zones"`
+	GlobalACLs []NodeACL             `json:"global_acls"`
+	NodeMeta   map[string]NodeMeta   `json:"node_meta,omitempty"`
+	Tokens     []JoinToken           `json:"tokens,omitempty"`
+	Templates  map[string]NodeConfig `json:"templates,omitempty"`
 }
 
 func NewScribe(n *Node) *Scribe {
@@ -60,6 +62,7 @@ func NewScribe(n *Node) *Scribe {
 		stats:       make(map[string]NodeStats),
 		revokedIDs:  make(map[string]struct{}),
 		nodeMeta:    make(map[string]NodeMeta),
+		templates:   make(map[string]NodeConfig),
 		persistPath: filepath.Join(n.cfg.Node.DataDir, "netconfig.json"),
 	}
 	s.load()
@@ -86,6 +89,9 @@ func (s *Scribe) load() {
 		s.nodeMeta = state.NodeMeta
 	}
 	s.tokens = state.Tokens
+	if state.Templates != nil {
+		s.templates = state.Templates
+	}
 	Infof("scribe: loaded %d DNS zones, %d revocations, %d node meta, %d tokens from disk",
 		len(s.dnsZones), len(s.revokedIDs), len(s.nodeMeta), len(s.tokens))
 }
@@ -101,12 +107,15 @@ func (s *Scribe) save() {
 	maps.Copy(meta, s.nodeMeta)
 	tokens := make([]JoinToken, len(s.tokens))
 	copy(tokens, s.tokens)
+	templates := make(map[string]NodeConfig, len(s.templates))
+	maps.Copy(templates, s.templates)
 	state := scribeState{
 		RevokedIDs: revoked,
 		DNSZones:   s.dnsZones,
 		GlobalACLs: s.globalACLs,
 		NodeMeta:   meta,
 		Tokens:     tokens,
+		Templates:  templates,
 	}
 	s.mu.RUnlock()
 
@@ -198,10 +207,16 @@ func (s *Scribe) Run(ctx context.Context) {
 	mux.HandleFunc("/api/tags", s.handleTags)
 	mux.HandleFunc("/api/name", s.handleName)
 	mux.HandleFunc("/api/mesh-ip", s.handleMeshIP)
+	mux.HandleFunc("/api/templates", s.handleTemplates)
+	mux.HandleFunc("/api/groups", s.handleGroups)
+	mux.HandleFunc("/api/bulk", s.handleBulk)
 	mux.HandleFunc("/api/remote/restart", s.handleRemoteRestart)
 	mux.HandleFunc("/api/remote/config", s.handleRemoteConfig)
 	mux.HandleFunc("/api/node/", s.handleNodeDetail)
 	mux.HandleFunc("/api/routes", s.handleRoutes)
+	mux.HandleFunc("/api/tokens", s.handleTokens)
+	mux.HandleFunc("/api/events", s.handleEventsAPI)
+	mux.HandleFunc("/api/versions", s.handleVersions)
 	mux.HandleFunc("/metrics", s.handleMetrics) // no auth — Prometheus scraping
 
 	// Wrap API routes with Bearer token auth.
@@ -271,6 +286,144 @@ func (s *Scribe) authMiddleware(apiKey string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// PushNodeConfig generates a signed NodeConfig for a target node and sends it via mesh.
+func (s *Scribe) PushNodeConfig(nodeID string, cfg NodeConfig) {
+	cfg.Version = time.Now().UnixMilli()
+	if cfg.MeshCIDR == "" {
+		cfg.MeshCIDR = s.node.cfg.Tun.CIDR
+	}
+	snc, err := SignNodeConfig(cfg, s.node.identity.PrivateKey, s.node.id)
+	if err != nil {
+		Warnf("scribe: sign node config for %s: %v", nodeID, err)
+		return
+	}
+	session, err := s.node.router.Resolve(nodeID)
+	if err != nil {
+		Warnf("scribe: no route to %s for node config push: %v", nodeID, err)
+		return
+	}
+	conn, err := session.Open()
+	if err != nil {
+		return
+	}
+	go func() {
+		defer conn.Close()
+		msg, _ := marshalStreamMsg(streamMsg{Type: "nodestate", NodeState: &snc})
+		_, _ = conn.Write(msg)
+	}()
+	Infof("scribe: pushed node config v%d to %s", cfg.Version, nodeID)
+}
+
+// BuildNodeConfigForPeer constructs a NodeConfig for a node based on its metadata and templates.
+func (s *Scribe) BuildNodeConfigForPeer(nodeID string) NodeConfig {
+	s.mu.RLock()
+	meta := s.nodeMeta[nodeID]
+	s.mu.RUnlock()
+
+	cfg := NodeConfig{
+		MeshCIDR: s.node.cfg.Tun.CIDR,
+	}
+	if meta.MeshIP != "" {
+		cfg.MeshIP = meta.MeshIP
+	}
+
+	// Apply matching template if available.
+	s.mu.RLock()
+	for pattern, tmpl := range s.templates {
+		if matchTagPattern(pattern, meta.Tags) {
+			cfg.TunEnabled = tmpl.TunEnabled
+			cfg.SocksEnabled = tmpl.SocksEnabled
+			cfg.DNSEnabled = tmpl.DNSEnabled
+			cfg.ExitEnabled = tmpl.ExitEnabled
+			cfg.ExitCIDRs = tmpl.ExitCIDRs
+			cfg.FECEnabled = tmpl.FECEnabled
+			cfg.LogLevel = tmpl.LogLevel
+			break
+		}
+	}
+	s.mu.RUnlock()
+
+	return cfg
+}
+
+// SetTemplate adds or updates a config template for a tag pattern.
+func (s *Scribe) SetTemplate(pattern string, cfg NodeConfig) {
+	s.mu.Lock()
+	s.templates[pattern] = cfg
+	s.mu.Unlock()
+	s.save()
+	Infof("scribe: template set for pattern %q", pattern)
+
+	// Re-push config to all nodes matching this pattern.
+	for _, entry := range s.node.table.Snapshot() {
+		if entry.NodeID == s.node.id {
+			continue
+		}
+		meta := s.nodeMeta[entry.NodeID]
+		if matchTagPattern(pattern, meta.Tags) {
+			go func(nodeID string) {
+				nc := s.BuildNodeConfigForPeer(nodeID)
+				s.PushNodeConfig(nodeID, nc)
+			}(entry.NodeID)
+		}
+	}
+}
+
+// DeleteTemplate removes a config template.
+func (s *Scribe) DeleteTemplate(pattern string) {
+	s.mu.Lock()
+	delete(s.templates, pattern)
+	s.mu.Unlock()
+	s.save()
+	Infof("scribe: template deleted for pattern %q", pattern)
+}
+
+// GetTemplates returns a copy of all config templates.
+func (s *Scribe) GetTemplates() map[string]NodeConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]NodeConfig, len(s.templates))
+	maps.Copy(out, s.templates)
+	return out
+}
+
+// matchTagPattern checks if any of the node's tags match a template pattern.
+// Supports exact match and prefix match (e.g. "site:nyc" matches tag "site:nyc/floor:3").
+func matchTagPattern(pattern string, tags []string) bool {
+	for _, tag := range tags {
+		if tag == pattern || strings.HasPrefix(tag, pattern+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// NodesByTagPattern returns nodeIDs of all nodes whose tags match the pattern.
+func (s *Scribe) NodesByTagPattern(pattern string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []string
+	for nodeID, meta := range s.nodeMeta {
+		if matchTagPattern(pattern, meta.Tags) {
+			out = append(out, nodeID)
+		}
+	}
+	return out
+}
+
+// Groups returns a map of tag prefixes to node counts for fleet overview.
+func (s *Scribe) Groups() map[string]int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	counts := make(map[string]int)
+	for _, meta := range s.nodeMeta {
+		for _, tag := range meta.Tags {
+			counts[tag]++
+		}
+	}
+	return counts
 }
 
 // AcceptStats stores a stats report from a peer node.
@@ -427,6 +580,12 @@ func (s *Scribe) SetTag(nodeID, tag string) {
 	Infof("scribe: tag %s +%s", nodeID, tag)
 	s.node.emitEvent(EventEntry{Type: EventTagChanged, NodeID: nodeID, Detail: "+" + tag})
 	s.broadcastNetConfig()
+
+	// Re-evaluate templates for this node after tag change.
+	go func() {
+		cfg := s.BuildNodeConfigForPeer(nodeID)
+		s.PushNodeConfig(nodeID, cfg)
+	}()
 }
 
 // RemoveTag removes a tag from a node.

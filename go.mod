@@ -3,7 +3,6 @@ module github.com/leonardomb1/pulse
 go 1.25.8
 
 require (
-	github.com/BurntSushi/toml v1.6.0
 	github.com/coder/websocket v1.8.14
 	github.com/gdamore/tcell/v2 v2.13.8
 	github.com/hashicorp/yamux v0.1.2

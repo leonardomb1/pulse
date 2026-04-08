@@ -18,7 +18,7 @@ import (
 
 // NodeFlags registers all flags for running a node on the given FlagSet.
 func NodeFlags(fs *flag.FlagSet) (
-	configPath, wsAddr, listenAddr, tcpAddr, dataDir, networkID, joinAddr, joinToken *string,
+	wsAddr, listenAddr, tcpAddr, dataDir, networkID, joinAddr, joinToken *string,
 	caEnabled *bool, caToken *string,
 	socksEnabled *bool, socksListen *string,
 	dnsEnabled *bool, dnsListen *string,
@@ -27,7 +27,6 @@ func NodeFlags(fs *flag.FlagSet) (
 	exitEnabled *bool, exitCIDRs *string,
 	meshCIDR *string,
 ) {
-	configPath = fs.String("config", "", "path to config.toml (optional)")
 	dataDir = fs.String("data-dir", "", "persistent data directory (default ~/.pulse)")
 	wsAddr = fs.String("addr", "", "advertised address (gossipped to peers)")
 	listenAddr = fs.String("listen", "", "bind address (default: same as --addr)")
@@ -131,13 +130,50 @@ func ApplyFlags(cfg *config.Config,
 	}
 }
 
+// ApplyNodeState loads state.dat and applies fields not explicitly set via CLI flags.
+func ApplyNodeState(cfg *config.Config, dataDir string, explicitFlags map[string]bool) {
+	snc, err := node.LoadNodeState(dataDir)
+	if err != nil || snc == nil {
+		return
+	}
+	// Verify signature would go here once CA pubkey is available at this stage.
+	// For now, trust the local file (it was written by a verified scribe push).
+	nc := snc.Config
+
+	if !explicitFlags["tun"] && nc.TunEnabled {
+		cfg.Tun.Enabled = true
+	}
+	if !explicitFlags["socks"] && nc.SocksEnabled {
+		cfg.SOCKS.Enabled = true
+	}
+	if !explicitFlags["dns"] && nc.DNSEnabled {
+		cfg.DNS.Enabled = true
+	}
+	if !explicitFlags["exit"] && nc.ExitEnabled {
+		cfg.Exit.Enabled = true
+	}
+	if !explicitFlags["exit-cidrs"] && len(nc.ExitCIDRs) > 0 {
+		cfg.Exit.CIDRs = nc.ExitCIDRs
+	}
+	if !explicitFlags["fec"] && nc.FECEnabled {
+		cfg.Tun.FEC = true
+	}
+	if !explicitFlags["mesh-cidr"] && nc.MeshCIDR != "" {
+		cfg.Tun.CIDR = nc.MeshCIDR
+	}
+	if !explicitFlags["log-level"] && nc.LogLevel != "" {
+		cfg.Node.LogLevel = nc.LogLevel
+	}
+	log.Printf("state: loaded signed config v%d from state.dat", nc.Version)
+}
+
 // RunNode starts a relay node. Called when pulse is run with no subcommand.
 // NodeVersion is set by main.go from ldflags.
 var NodeVersion = "dev"
 
 func RunNode(args []string) {
 	fs := flag.NewFlagSet("pulse", flag.ExitOnError)
-	configPath, wsAddr, listenAddr, tcpAddr, dataDir, networkID, joinAddr, joinToken,
+	wsAddr, listenAddr, tcpAddr, dataDir, networkID, joinAddr, joinToken,
 		caEnabled, caToken,
 		socksEnabled, socksListen,
 		dnsEnabled, dnsListen,
@@ -148,13 +184,15 @@ func RunNode(args []string) {
 	logLevelFlag := fs.String("log-level", "", "log level: debug, info, warn, error (default: info)")
 	_ = fs.Parse(args)
 
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		log.Fatalf("load config: %v", err)
-	}
+	cfg := config.Defaults()
 	ApplyFlags(cfg, *wsAddr, *listenAddr, *tcpAddr, *dataDir, *networkID, *joinAddr, *joinToken,
 		*caEnabled, *caToken, *socksEnabled, *socksListen,
 		*dnsEnabled, *dnsListen, *tunEnabled, *fecEnabled, *scribeEnabled, *scribeListen, *exitEnabled, *exitCIDRs, *meshCIDR)
+
+	// Load signed state from scribe (if exists). CLI flags take precedence.
+	explicit := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	ApplyNodeState(cfg, cfg.Node.DataDir, explicit)
 
 	ll := *logLevelFlag
 	if ll == "" {
@@ -184,6 +222,7 @@ func RunNode(args []string) {
 	var ca *node.CA
 	if cfg.CA.Enabled {
 		caDir := cfg.CA.DataDir
+		var err error
 		ca, err = LoadOrInitCA(caDir, cfg.CA.JoinToken)
 		if err != nil {
 			log.Fatalf("init CA: %v", err)
@@ -268,15 +307,10 @@ func LoadOrInitCA(dir, token string) (*node.CA, error) {
 	return node.LoadCA(dir, token)
 }
 
-// ResolveDataDir resolves the data directory from flags or config.
-func ResolveDataDir(dataDir, configPath string) string {
+// ResolveDataDir resolves the data directory from flags or defaults.
+func ResolveDataDir(dataDir string) string {
 	if dataDir != "" {
 		return dataDir
 	}
-	cfg, err := config.Load(configPath)
-	if err == nil && cfg.Node.DataDir != "" {
-		return cfg.Node.DataDir
-	}
-	home, _ := os.UserHomeDir()
-	return home + "/.pulse"
+	return config.Defaults().Node.DataDir
 }

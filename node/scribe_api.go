@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func (s *Scribe) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -235,17 +236,164 @@ func (s *Scribe) handleTags(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleRoutes returns the node's exit route table.
+// handleRoutes manages exit routes.
 //
-//	GET /api/routes
+//	GET    /api/routes
+//	POST   /api/routes {"cidr":"10.0.0.0/8", "via":"node-id"}
+//	DELETE /api/routes {"cidr":"10.0.0.0/8"}
 func (s *Scribe) handleRoutes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		routes := s.node.exitRoutes.Snapshot()
+		_ = json.NewEncoder(w).Encode(routes)
+	case http.MethodPost:
+		var req struct {
+			CIDR string `json:"cidr"`
+			Via  string `json:"via"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CIDR == "" || req.Via == "" {
+			http.Error(w, `{"error":"cidr and via required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := s.node.exitRoutes.Add(req.CIDR, req.Via); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
+		_ = s.node.exitRoutes.Save()
+		w.WriteHeader(http.StatusNoContent)
+	case http.MethodDelete:
+		var req struct {
+			CIDR string `json:"cidr"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CIDR == "" {
+			http.Error(w, `{"error":"cidr required"}`, http.StatusBadRequest)
+			return
+		}
+		s.node.exitRoutes.Remove(req.CIDR)
+		_ = s.node.exitRoutes.Save()
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleTokens manages join tokens.
+//
+//	GET    /api/tokens
+//	POST   /api/tokens {"ttl":"1h", "max_uses":1}
+//	DELETE /api/tokens {"prefix":"abc"}
+func (s *Scribe) handleTokens(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		tokens := s.ListTokens()
+		if tokens == nil {
+			tokens = []JoinToken{}
+		}
+		_ = json.NewEncoder(w).Encode(tokens)
+	case http.MethodPost:
+		var req struct {
+			TTL     string `json:"ttl"`
+			MaxUses int    `json:"max_uses"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+			return
+		}
+		var ttl time.Duration
+		if req.TTL != "" {
+			var err error
+			ttl, err = time.ParseDuration(req.TTL)
+			if err != nil {
+				http.Error(w, `{"error":"invalid TTL"}`, http.StatusBadRequest)
+				return
+			}
+		}
+		t := s.CreateToken(ttl, req.MaxUses)
+		_ = json.NewEncoder(w).Encode(t)
+	case http.MethodDelete:
+		var req struct {
+			Prefix string `json:"prefix"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Prefix == "" {
+			http.Error(w, `{"error":"prefix required"}`, http.StatusBadRequest)
+			return
+		}
+		if err := s.RevokeToken(req.Prefix); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleEventsAPI queries the event log.
+//
+//	GET /api/events?type=link_up&node=abc&since=2024-01-01T00:00:00Z
+func (s *Scribe) handleEventsAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	routes := s.node.exitRoutes.Snapshot()
+	if s.node.events == nil {
+		http.Error(w, `{"error":"event log not available"}`, http.StatusServiceUnavailable)
+		return
+	}
+	opts := FilterOpts{
+		Type: EventType(r.URL.Query().Get("type")),
+		Node: r.URL.Query().Get("node"),
+	}
+	if since := r.URL.Query().Get("since"); since != "" {
+		t, err := time.Parse(time.RFC3339, since)
+		if err != nil {
+			http.Error(w, `{"error":"invalid since"}`, http.StatusBadRequest)
+			return
+		}
+		opts.Since = t
+	}
+	events, err := ReadFiltered(s.node.events.path, opts)
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(routes)
+	_ = json.NewEncoder(w).Encode(events)
+}
+
+// handleVersions returns fleet version distribution.
+//
+//	GET /api/versions
+func (s *Scribe) handleVersions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	peers := s.node.table.Snapshot()
+	counts := make(map[string]int)
+	var nodes []struct {
+		NodeID  string `json:"node_id"`
+		Version string `json:"version"`
+	}
+	for _, p := range peers {
+		v := p.Version
+		if v == "" {
+			v = "unknown"
+		}
+		counts[v]++
+		nodes = append(nodes, struct {
+			NodeID  string `json:"node_id"`
+			Version string `json:"version"`
+		}{p.NodeID, v})
+	}
+	resp := struct {
+		Counts map[string]int `json:"counts"`
+		Nodes  interface{}    `json:"nodes"`
+	}{counts, nodes}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleName sets a node's friendly name.
@@ -290,6 +438,114 @@ func (s *Scribe) handleMeshIP(w http.ResponseWriter, r *http.Request) {
 	}
 	s.SetMeshIP(req.NodeID, req.MeshIP)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGroups returns tag-based group counts.
+//
+//	GET /api/groups
+func (s *Scribe) handleGroups(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.Groups())
+}
+
+// handleBulk performs a bulk operation on nodes matching a tag pattern.
+//
+//	POST /api/bulk {"pattern":"site:nyc", "action":"restart"}
+//	POST /api/bulk {"pattern":"tag:gw", "action":"config", "config":{"log_level":"debug"}}
+//	POST /api/bulk {"pattern":"tag:gw", "action":"push_config"}
+func (s *Scribe) handleBulk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Pattern string            `json:"pattern"`
+		Action  string            `json:"action"`
+		Config  map[string]string `json:"config,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" || req.Action == "" {
+		http.Error(w, `{"error":"pattern and action required"}`, http.StatusBadRequest)
+		return
+	}
+
+	nodeIDs := s.NodesByTagPattern(req.Pattern)
+	if len(nodeIDs) == 0 {
+		http.Error(w, `{"error":"no nodes match pattern"}`, http.StatusNotFound)
+		return
+	}
+
+	var errors []string
+	for _, nodeID := range nodeIDs {
+		var err error
+		switch req.Action {
+		case "restart":
+			err = s.node.SendRemoteCmd(nodeID, "restart", nil)
+		case "config":
+			err = s.node.SendRemoteCmd(nodeID, "config", req.Config)
+		case "push_config":
+			cfg := s.BuildNodeConfigForPeer(nodeID)
+			s.PushNodeConfig(nodeID, cfg)
+		default:
+			http.Error(w, `{"error":"unknown action: `+req.Action+`"}`, http.StatusBadRequest)
+			return
+		}
+		if err != nil {
+			errors = append(errors, nodeID+": "+err.Error())
+		}
+	}
+
+	resp := struct {
+		Matched int      `json:"matched"`
+		Errors  []string `json:"errors,omitempty"`
+	}{
+		Matched: len(nodeIDs),
+		Errors:  errors,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleTemplates manages config templates.
+//
+//	GET    /api/templates                                    list templates
+//	POST   /api/templates {"pattern":"tag:gw", "config":{}} add/update template
+//	DELETE /api/templates {"pattern":"tag:gw"}               delete template
+func (s *Scribe) handleTemplates(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.Method {
+	case http.MethodGet:
+		_ = json.NewEncoder(w).Encode(s.GetTemplates())
+
+	case http.MethodPost:
+		var req struct {
+			Pattern string     `json:"pattern"`
+			Config  NodeConfig `json:"config"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
+			http.Error(w, `{"error":"pattern and config required"}`, http.StatusBadRequest)
+			return
+		}
+		s.SetTemplate(req.Pattern, req.Config)
+		w.WriteHeader(http.StatusNoContent)
+
+	case http.MethodDelete:
+		var req struct {
+			Pattern string `json:"pattern"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pattern == "" {
+			http.Error(w, `{"error":"pattern required"}`, http.StatusBadRequest)
+			return
+		}
+		s.DeleteTemplate(req.Pattern)
+		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleNodeDetail returns detailed information about a single node.

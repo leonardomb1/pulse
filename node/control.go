@@ -209,6 +209,9 @@ func (s *ControlServer) cmdStatus(conn net.Conn) {
 		if m, ok := meta[peers[i].NodeID]; ok {
 			peers[i].Name = m.Name
 			peers[i].Tags = m.Tags
+			if m.MeshIP != "" {
+				peers[i].MeshIP = m.MeshIP
+			}
 		}
 		// Populate link type from the local registry.
 		if link, ok := s.node.registry.Get(peers[i].NodeID); ok && !link.IsClosed() {

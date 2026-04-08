@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"net"
-	"os"
 	"time"
 
 	"github.com/leonardomb1/pulse/config"
@@ -34,19 +33,13 @@ func CtrlDo(socketPath string, cmd interface{}) (map[string]json.RawMessage, err
 	return result, nil
 }
 
-// SocketPath resolves the control socket path from flags or config.
+// SocketPath resolves the control socket path from flags or defaults.
 func SocketPath(args []string) string {
 	fs := flag.NewFlagSet("", flag.ContinueOnError)
 	sock := fs.String("socket", "", "control socket path")
-	configPath := fs.String("config", "", "path to config.toml")
 	_ = fs.Parse(args)
 	if *sock != "" {
 		return *sock
 	}
-	cfg, err := config.Load(*configPath)
-	if err == nil && cfg.Control.Socket != "" {
-		return cfg.Control.Socket
-	}
-	home, _ := os.UserHomeDir()
-	return home + "/.pulse/pulse.sock"
+	return config.Defaults().Control.Socket
 }

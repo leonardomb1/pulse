@@ -75,7 +75,7 @@ Embedded devices behind carrier-grade NAT join the mesh through a cloud relay. T
 
 ## Quickstart
 
-No config file needed — everything can be passed as flags.
+All configuration is via CLI flags and signed state from the scribe. No config files.
 
 ```bash
 # Build
@@ -87,9 +87,14 @@ pulse --ca --scribe --addr relay.example.com:443 --listen :443 \
 
 # On another machine — join the mesh:
 pulse join relay.example.com:443 --token <token>
+# Or with an invite code (encodes relay + token + network):
+pulse join pls_eyJyIjoicmVsYXkuZXhhbXBsZS5jb206NDQzIiwidCI6Im15dG9rZW4ifQ
 
 # Start with services enabled:
 pulse start --socks --dns --tun --network mynet relay.example.com:443
+
+# Generate an invite code to share with others:
+pulse invite --network mynet
 
 # Check status:
 pulse status
@@ -113,6 +118,8 @@ pulse top                             Interactive TUI dashboard
 
 ```
 pulse join <relay> --token <tok>      Join a mesh (one-time)
+pulse join <pls_code>                 Join using an invite code
+pulse invite [--network <id>]         Generate an invite code (CA only)
 pulse status                          Show mesh status table
 pulse tag <node-id> <tag>             Add a tag to a node
 pulse untag <node-id> <tag>           Remove a tag
@@ -157,6 +164,20 @@ pulse route list|add|remove           Manage exit routes
 pulse ca log                          View CA audit log
 pulse ca sign --ca-dir <dir> ...      Offline cert signing
 pulse setup dns                       Configure systemd-resolved for .pulse (see below)
+pulse completion <bash|zsh|fish>      Generate shell completions
+```
+
+To enable tab completion:
+
+```bash
+# Bash (add to ~/.bashrc):
+eval "$(pulse completion bash)"
+
+# Zsh (add to ~/.zshrc):
+eval "$(pulse completion zsh)"
+
+# Fish:
+pulse completion fish | source
 ```
 
 #### Setting up .pulse DNS resolution
@@ -184,7 +205,6 @@ sudo systemctl restart systemd-resolved
 ## Node Flags
 
 ```
---config <file>        Path to config.toml (optional)
 --data-dir <path>      Data directory (default ~/.pulse)
 --addr <addr>          Advertised address (default :8443)
 --listen <addr>        Bind address (default: same as --addr)
@@ -390,39 +410,9 @@ pulse_tokens_valid                            # usable join tokens
 pulse_node_info{node_id,network_id}           # node metadata labels
 ```
 
-## Config File (optional)
+## Node Configuration
 
-All settings can be passed as flags. A TOML config file is optional:
-
-```toml
-[node]
-addr       = "relay.example.com:443"
-listen     = ":443"
-network_id = "prod"
-log_level  = "info"
-
-[ca]
-enabled    = true
-join_token = "your-secret-token"
-
-[scribe]
-enabled = true
-
-[tun]
-enabled = true
-fec     = false
-
-[socks]
-enabled = true
-
-[dns]
-enabled = true
-listen  = "127.0.0.1:5353"
-
-[exit]
-enabled = true
-cidrs   = ["0.0.0.0/0"]
-```
+All nodes are configured via CLI flags at startup. After joining the mesh, the scribe pushes signed configuration (`~/.pulse/state.dat`) to each node — this persists across restarts. Runtime changes are made through the scribe API, not by editing files.
 
 ## Examples
 
@@ -482,6 +472,18 @@ pulse acl add --from "tag:dev" --to "tag:prod" --deny
 
 # Allow DB access on postgres port only:
 pulse acl add --from "*" --to "tag:db" --ports 5432
+```
+
+### Invite a teammate
+
+```bash
+# Generate a single invite code (encodes relay address + token + network):
+pulse invite --network myteam
+# Output: pls_eyJuIjoibXl0ZWFtIiwiciI6InJlbGF5LmV4YW1wbGUuY29tOjQ0MyIsInQiOiJhYmMxMjMifQ
+
+# The teammate runs:
+pulse join pls_eyJuIjoibXl0ZWFtIiwiciI6InJlbGF5LmV4YW1wbGUuY29tOjQ0MyIsInQiOiJhYmMxMjMifQ
+pulse start --tun --socks
 ```
 
 ### Time-limited invite

@@ -67,20 +67,19 @@ func VerifyNetConfig(snc SignedNetConfig, pub ed25519.PublicKey) error {
 }
 
 // NodeConfig is the per-node configuration managed by the scribe.
-// It replaces config.toml for runtime settings — nodes receive this via mesh
+// Nodes receive this via mesh from the scribe
 // and persist it to state.dat.
 type NodeConfig struct {
-	Version           int64    `json:"version"`
-	TunEnabled        bool     `json:"tun_enabled"`
-	SocksEnabled      bool     `json:"socks_enabled"`
-	DNSEnabled        bool     `json:"dns_enabled"`
-	ExitEnabled       bool     `json:"exit_enabled"`
-	ExitCIDRs         []string `json:"exit_cidrs,omitempty"`
-	FECEnabled        bool     `json:"fec_enabled"`
-	MeshIP            string   `json:"mesh_ip,omitempty"`
-	MeshCIDR          string   `json:"mesh_cidr,omitempty"`
-	LogLevel          string   `json:"log_level,omitempty"`
-	BandwidthLimitBps int64    `json:"bandwidth_limit_bps,omitempty"` // 0 = unlimited
+	Version      int64    `json:"version"`
+	TunEnabled   bool     `json:"tun_enabled"`
+	SocksEnabled bool     `json:"socks_enabled"`
+	DNSEnabled   bool     `json:"dns_enabled"`
+	ExitEnabled  bool     `json:"exit_enabled"`
+	ExitCIDRs    []string `json:"exit_cidrs,omitempty"`
+	FECEnabled   bool     `json:"fec_enabled"`
+	MeshIP       string   `json:"mesh_ip,omitempty"`
+	MeshCIDR     string   `json:"mesh_cidr,omitempty"`
+	LogLevel     string   `json:"log_level,omitempty"`
 }
 
 // SignedNodeConfig wraps a NodeConfig with a scribe signature.

@@ -32,6 +32,9 @@ func main() {
 		case "join":
 			cli.RunJoin(os.Args[2:])
 			return
+		case "invite":
+			cli.RunInvite(os.Args[2:])
+			return
 		case "tag":
 			cli.RunTag(os.Args[2:])
 			return
@@ -46,6 +49,18 @@ func main() {
 			return
 		case "acl":
 			cli.RunACL(os.Args[2:])
+			return
+		case "restart":
+			cli.RunRestart(os.Args[2:])
+			return
+		case "groups":
+			cli.RunGroups(os.Args[2:])
+			return
+		case "template":
+			cli.RunTemplate(os.Args[2:])
+			return
+		case "bulk":
+			cli.RunBulk(os.Args[2:])
 			return
 		case "revoke":
 			cli.RunRevoke(os.Args[2:])
@@ -79,6 +94,9 @@ func main() {
 			return
 		case "top":
 			cli.RunTop(os.Args[2:])
+			return
+		case "completion":
+			cli.RunCompletion(os.Args[2:])
 			return
 		case "setup":
 			cli.RunSetup(os.Args[2:])

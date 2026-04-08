@@ -82,7 +82,7 @@ func TestScribeNonScribeRejectsAllMutations(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "pulse.sock")
 
-	cfg, _ := config.Load("")
+	cfg := config.Defaults()
 	cfg.Node.DataDir = dir
 	cfg.Node.Addr = "127.0.0.1:0"
 	cfg.Node.TCPListen = "127.0.0.1:0"

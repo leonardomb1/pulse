@@ -7,7 +7,7 @@ import (
 )
 
 func TestApplyFlagsDataDir(t *testing.T) {
-	cfg, _ := config.Load("")
+	cfg := config.Defaults()
 
 	cli.ApplyFlags(cfg,
 		"", "", "", "/tmp/test-pulse", "", "", "",
@@ -34,7 +34,7 @@ func TestApplyFlagsDataDir(t *testing.T) {
 }
 
 func TestApplyFlagsFeatures(t *testing.T) {
-	cfg, _ := config.Load("")
+	cfg := config.Defaults()
 
 	cli.ApplyFlags(cfg,
 		"relay:443", ":443", ":9000", "", "prod", "", "mytoken",
@@ -88,7 +88,7 @@ func TestApplyFlagsFeatures(t *testing.T) {
 }
 
 func TestApplyFlagsCATokenFallback(t *testing.T) {
-	cfg, _ := config.Load("")
+	cfg := config.Defaults()
 
 	// When --ca is set but --ca-token is empty, should fall back to --token.
 	cli.ApplyFlags(cfg,
@@ -107,7 +107,7 @@ func TestApplyFlagsCATokenFallback(t *testing.T) {
 }
 
 func TestApplyFlagsNoOverrideDefaults(t *testing.T) {
-	cfg, _ := config.Load("")
+	cfg := config.Defaults()
 	origAddr := cfg.Node.Addr
 
 	// Empty flags should not override defaults.
@@ -128,13 +128,13 @@ func TestApplyFlagsNoOverrideDefaults(t *testing.T) {
 
 func TestResolveDataDir(t *testing.T) {
 	// Explicit dir takes precedence.
-	dir := cli.ResolveDataDir("/explicit", "")
+	dir := cli.ResolveDataDir("/explicit")
 	if dir != "/explicit" {
 		t.Errorf("explicit dir: got %q", dir)
 	}
 
 	// Empty falls back to default.
-	dir = cli.ResolveDataDir("", "")
+	dir = cli.ResolveDataDir("")
 	if dir == "" {
 		t.Error("should not return empty")
 	}
