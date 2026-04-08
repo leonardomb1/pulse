@@ -9,8 +9,8 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"io"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -40,7 +40,8 @@ func RunStart(args []string) {
 	if err := cmd.Start(); err != nil {
 		log.Fatalf("start: %v", err)
 	}
-	fmt.Printf("pulse started (pid %d)\n", cmd.Process.Pid)
+	logPath := filepath.Join(config.Defaults().Node.DataDir, "pulse.log")
+	fmt.Printf("pulse started (pid %d, logs: %s)\n", cmd.Process.Pid, logPath)
 }
 
 func RunStop(args []string) {
@@ -184,19 +185,56 @@ func RunEvents(args []string) {
 }
 
 func RunLogs(args []string) {
-	sock := SocketPath(args)
-	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
-	if err != nil {
-		log.Fatalf("connect to daemon: %v", err)
+	fs := flag.NewFlagSet("logs", flag.ExitOnError)
+	follow := fs.Bool("f", false, "follow log output")
+	lines := fs.Int("n", 50, "number of lines to show")
+	_ = fs.Parse(args)
+
+	logPath := filepath.Join(config.Defaults().Node.DataDir, "pulse.log")
+
+	if *follow {
+		// tail -f behavior: print last N lines then follow.
+		tailFollow(logPath, *lines)
+	} else {
+		tailLines(logPath, *lines)
 	}
-	defer conn.Close()
+}
 
-	cmd, _ := json.Marshal(map[string]string{"cmd": "logs"})
-	_, _ = conn.Write(append(cmd, '\n'))
+func tailLines(path string, n int) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatalf("read %s: %v", path, err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	start := len(lines) - n
+	if start < 0 {
+		start = 0
+	}
+	for _, l := range lines[start:] {
+		fmt.Println(l)
+	}
+}
 
-	sc := bufio.NewScanner(conn)
-	for sc.Scan() {
-		fmt.Println(sc.Text())
+func tailFollow(path string, n int) {
+	// Print last N lines first.
+	tailLines(path, n)
+
+	// Then follow.
+	f, err := os.Open(path)
+	if err != nil {
+		log.Fatalf("open %s: %v", path, err)
+	}
+	defer f.Close()
+	_, _ = f.Seek(0, io.SeekEnd)
+
+	reader := bufio.NewReader(f)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		fmt.Print(line)
 	}
 }
 
@@ -1080,8 +1118,8 @@ Networking:
   pulse route list|add|remove             manage exit routes
 
 Observability:
-  pulse events [--type X] [--node X]      query event log
-  pulse logs                              stream live events from daemon
+  pulse logs [-f] [-n 50]                 show daemon logs (tail/follow)
+  pulse events [--type X] [--node X]      query structured event log
   pulse stats [node-id]                   show per-peer stats time series
 
 Fleet:

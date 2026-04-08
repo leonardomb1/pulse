@@ -209,6 +209,13 @@ func RunNode(args []string) {
 		node.SetLogLevel(node.ParseLogLevel(ll))
 	}
 
+	// Set up rotating log file (daemon writes here, pulse logs reads it).
+	logPath := filepath.Join(cfg.Node.DataDir, "pulse.log")
+	_ = os.MkdirAll(cfg.Node.DataDir, 0700)
+	if err := node.SetupLogFile(logPath); err != nil {
+		log.Printf("warning: could not set up log file: %v", err)
+	}
+
 	cfg.Bootstrap.Peers = append(cfg.Bootstrap.Peers, fs.Args()...)
 
 	// Join flow (first-time bootstrap).

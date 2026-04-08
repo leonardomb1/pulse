@@ -2,7 +2,9 @@ package node
 
 import (
 	"log"
+	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -37,6 +39,57 @@ func ParseLogLevel(s string) LogLevel {
 	default:
 		return LevelInfo
 	}
+}
+
+const logMaxBytes = 10 * 1024 * 1024 // 10 MB
+
+// RotatingWriter wraps a file with automatic rotation at logMaxBytes.
+type RotatingWriter struct {
+	mu   sync.Mutex
+	f    *os.File
+	path string
+	size int64
+}
+
+// NewRotatingWriter opens a log file with rotation support.
+func NewRotatingWriter(path string) (*RotatingWriter, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+	info, _ := f.Stat()
+	size := int64(0)
+	if info != nil {
+		size = info.Size()
+	}
+	return &RotatingWriter{f: f, path: path, size: size}, nil
+}
+
+func (w *RotatingWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.f.Write(p)
+	w.size += int64(n)
+	if w.size >= logMaxBytes {
+		w.f.Close()
+		_ = os.Rename(w.path, w.path+".1")
+		f, ferr := os.OpenFile(w.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if ferr == nil {
+			w.f = f
+			w.size = 0
+		}
+	}
+	return n, err
+}
+
+// SetupLogFile configures the global logger to write to a rotating file.
+func SetupLogFile(path string) error {
+	w, err := NewRotatingWriter(path)
+	if err != nil {
+		return err
+	}
+	log.SetOutput(w)
+	return nil
 }
 
 func Debugf(format string, args ...any) {
