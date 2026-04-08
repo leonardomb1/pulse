@@ -190,6 +190,7 @@ func (s *Scribe) Run(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				s.detectMeshIPCollisions()
 				s.broadcastNetConfig()
 			}
 		}
@@ -230,7 +231,7 @@ func (s *Scribe) Run(ctx context.Context) {
 
 	go func() {
 		<-ctx.Done()
-		srv.Close()
+		_ = srv.Close()
 	}()
 
 	Infof("scribe: HTTP API on %s", s.node.cfg.Scribe.Listen)
@@ -310,7 +311,7 @@ func (s *Scribe) PushNodeConfig(nodeID string, cfg NodeConfig) {
 		return
 	}
 	go func() {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		msg, _ := marshalStreamMsg(streamMsg{Type: "nodestate", NodeState: &snc})
 		_, _ = conn.Write(msg)
 	}()
@@ -538,7 +539,7 @@ func (s *Scribe) broadcastNetConfig() {
 			if err != nil {
 				return
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			msg, _ := marshalStreamMsg(streamMsg{Type: "netconfig", NetConfig: &snc})
 			_, _ = conn.Write(msg)
 		}(link)
@@ -559,7 +560,7 @@ func (s *Scribe) PushTo(session Session) {
 		return
 	}
 	go func() {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		msg, _ := marshalStreamMsg(streamMsg{Type: "netconfig", NetConfig: &snc})
 		_, _ = conn.Write(msg)
 	}()
@@ -725,6 +726,100 @@ func (s *Scribe) GlobalACLRules() []ACLRule {
 	out := make([]ACLRule, len(s.globalACLs[0].Allow))
 	copy(out, s.globalACLs[0].Allow)
 	return out
+}
+
+// detectMeshIPCollisions checks all nodes in the gossip table for mesh IP
+// collisions. If two nodes derive the same IP, the one that joined later
+// (by LastSeen) gets a free IP assigned via SetMeshIP.
+func (s *Scribe) detectMeshIPCollisions() {
+	cidr := s.node.cfg.Tun.CIDR
+	if cidr == "" {
+		return
+	}
+
+	entries := s.node.table.Snapshot()
+	// ipOwner maps derived mesh IP → nodeID of the earliest-seen node using it.
+	ipOwner := make(map[string]string, len(entries))
+	// Track all used IPs (both derived and manually assigned).
+	usedIPs := make(map[string]bool, len(entries))
+
+	s.mu.RLock()
+	// First pass: collect manually assigned IPs.
+	for nodeID, meta := range s.nodeMeta {
+		if meta.MeshIP != "" {
+			usedIPs[meta.MeshIP] = true
+			ipOwner[meta.MeshIP] = nodeID
+		}
+	}
+	s.mu.RUnlock()
+
+	// Sort entries by LastSeen so earlier nodes keep their IP.
+	// We process in order and the first node to claim an IP wins.
+	type nodeIP struct {
+		nodeID   string
+		ip       string
+		lastSeen time.Time
+	}
+	var derived []nodeIP
+	for _, e := range entries {
+		s.mu.RLock()
+		meta := s.nodeMeta[e.NodeID]
+		s.mu.RUnlock()
+		if meta.MeshIP != "" {
+			continue // manually assigned, skip
+		}
+		ip := MeshIPFromNodeIDWithCIDR(e.NodeID, cidr).String()
+		derived = append(derived, nodeIP{nodeID: e.NodeID, ip: ip, lastSeen: e.LastSeen})
+	}
+
+	// Sort by LastSeen ascending (earliest first keeps their IP).
+	for i := 1; i < len(derived); i++ {
+		for j := i; j > 0 && derived[j].lastSeen.Before(derived[j-1].lastSeen); j-- {
+			derived[j], derived[j-1] = derived[j-1], derived[j]
+		}
+	}
+
+	for _, d := range derived {
+		if owner, exists := ipOwner[d.ip]; exists && owner != d.nodeID {
+			// Collision: this node joined later, assign a free IP.
+			freeIP := findFreeMeshIP(cidr, usedIPs)
+			if freeIP == "" {
+				Warnf("scribe: no free mesh IP for collision resolution (node %s)", d.nodeID)
+				continue
+			}
+			Infof("scribe: mesh IP collision %s between %s and %s, reassigning %s → %s",
+				d.ip, owner, d.nodeID, d.nodeID, freeIP)
+			usedIPs[freeIP] = true
+			ipOwner[freeIP] = d.nodeID
+			s.SetMeshIP(d.nodeID, freeIP)
+		} else {
+			usedIPs[d.ip] = true
+			ipOwner[d.ip] = d.nodeID
+		}
+	}
+}
+
+// findFreeMeshIP iterates host addresses in the CIDR to find one not in usedIPs.
+func findFreeMeshIP(cidr string, usedIPs map[string]bool) string {
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return ""
+	}
+	prefix := ipNet.IP.To4()
+	ones, bits := ipNet.Mask.Size()
+	hostBits := bits - ones
+	maxHost := (uint32(1) << hostBits) - 2
+	netAddr := (uint32(prefix[0]) << 24) | (uint32(prefix[1]) << 16) |
+		(uint32(prefix[2]) << 8) | uint32(prefix[3])
+
+	for h := uint32(1); h <= maxHost; h++ {
+		ipVal := netAddr + h
+		ip := net.IP{byte(ipVal >> 24), byte(ipVal >> 16), byte(ipVal >> 8), byte(ipVal)}
+		if !usedIPs[ip.String()] {
+			return ip.String()
+		}
+	}
+	return ""
 }
 
 // HTTP handlers are in scribe_api.go.

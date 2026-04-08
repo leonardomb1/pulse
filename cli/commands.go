@@ -61,7 +61,12 @@ func RunStatus(args []string) {
 
 	var self string
 	_ = json.Unmarshal(resp["self"], &self)
-	selfMeshIP := node.MeshIPFromNodeID(self)
+	var meshCIDR string
+	_ = json.Unmarshal(resp["mesh_cidr"], &meshCIDR)
+	if meshCIDR == "" {
+		meshCIDR = config.DefaultMeshCIDR
+	}
+	selfMeshIP := node.MeshIPFromNodeIDWithCIDR(self, meshCIDR)
 
 	var networkID string
 	_ = json.Unmarshal(resp["network_id"], &networkID)
@@ -75,11 +80,11 @@ func RunStatus(args []string) {
 	_ = json.Unmarshal(resp["peers"], &peers)
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NODE ID\tNAME\tADDR\tMESH IP\tLINK\tLATENCY\tLOSS%\tHOPS\tVERSION\tROLES\tTAGS\tLAST SEEN")
+	_, _ = fmt.Fprintln(tw, "NODE ID\tNAME\tADDR\tMESH IP\tLINK\tLATENCY\tLOSS%\tHOPS\tVERSION\tROLES\tTAGS\tLAST SEEN")
 	for _, p := range peers {
 		meshIP := p.MeshIP
 		if meshIP == "" {
-			meshIP = node.MeshIPFromNodeID(p.NodeID).String()
+			meshIP = node.MeshIPFromNodeIDWithCIDR(p.NodeID, meshCIDR).String()
 		}
 		linkType := "-"
 		if p.LinkType != "" {
@@ -120,10 +125,10 @@ func RunStatus(args []string) {
 		if ver == "" {
 			ver = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
 			p.NodeID, name, p.Addr, meshIP, linkType, latency, loss, p.HopCount, ver, roles, tags, lastSeen)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 }
 
 func RunStats(args []string) {
@@ -224,7 +229,7 @@ func tailFollow(path string, n int) {
 	if err != nil {
 		log.Fatalf("open %s: %v", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, _ = f.Seek(0, io.SeekEnd)
 
 	reader := bufio.NewReader(f)
@@ -248,7 +253,17 @@ func RunID(args []string) {
 	if err != nil {
 		log.Fatalf("load identity: %v", err)
 	}
-	meshIP := node.MeshIPFromNodeID(identity.NodeID)
+	// Try to get active CIDR from running daemon.
+	meshCIDR := config.DefaultMeshCIDR
+	sock := filepath.Join(dir, "pulse.sock")
+	if resp, err := CtrlDo(sock, map[string]string{"cmd": "mesh-cidr"}); err == nil {
+		var cidr string
+		_ = json.Unmarshal(resp["mesh_cidr"], &cidr)
+		if cidr != "" {
+			meshCIDR = cidr
+		}
+	}
+	meshIP := node.MeshIPFromNodeIDWithCIDR(identity.NodeID, meshCIDR)
 	fmt.Printf("%s (mesh: %s)\n", identity.NodeID, meshIP)
 }
 
@@ -393,8 +408,8 @@ func RunJoin(args []string) {
 	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: pulse join <relay-addr> --token <token>")
-		fmt.Fprintln(os.Stderr, "       pulse join <pls_code>")
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse join <relay-addr> --token <token>")
+		_, _ = fmt.Fprintln(os.Stderr, "       pulse join <pls_code>")
 		os.Exit(1)
 	}
 
@@ -440,7 +455,7 @@ func RunTag(args []string) {
 	sock := fs.String("socket", "", "control socket path")
 	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: pulse tag <node-id> <tag>")
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse tag <node-id> <tag>")
 		os.Exit(1)
 	}
 	path := SocketPath([]string{"--socket", *sock})
@@ -455,7 +470,7 @@ func RunUntag(args []string) {
 	sock := fs.String("socket", "", "control socket path")
 	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: pulse untag <node-id> <tag>")
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse untag <node-id> <tag>")
 		os.Exit(1)
 	}
 	path := SocketPath([]string{"--socket", *sock})
@@ -470,7 +485,7 @@ func RunSetName(args []string) {
 	sock := fs.String("socket", "", "control socket path")
 	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: pulse name <node-id> <name>")
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse name <node-id> <name>")
 		os.Exit(1)
 	}
 	path := SocketPath([]string{"--socket", *sock})
@@ -499,7 +514,7 @@ func RunACL(args []string) {
 			return
 		}
 		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "#\tACTION\tFROM\tTO\tPORTS")
+		_, _ = fmt.Fprintln(tw, "#\tACTION\tFROM\tTO\tPORTS")
 		for i, r := range rules {
 			action := r.Action
 			if action == "" {
@@ -509,10 +524,10 @@ func RunACL(args []string) {
 			if src == "" {
 				src = "*"
 			}
-			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n",
 				i, action, src, r.DstPattern, node.FormatPortRanges(r.Ports))
 		}
-		tw.Flush()
+		_ = tw.Flush()
 
 	case "add":
 		fs := flag.NewFlagSet("acl add", flag.ExitOnError)
@@ -546,7 +561,7 @@ func RunACL(args []string) {
 		sock := fs.String("socket", "", "control socket path")
 		_ = fs.Parse(args[1:])
 		if fs.NArg() < 1 {
-			fmt.Fprintln(os.Stderr, "Usage: pulse acl remove <index>")
+			_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse acl remove <index>")
 			os.Exit(1)
 		}
 		idx, err := strconv.Atoi(fs.Arg(0))
@@ -599,11 +614,11 @@ func RunDNS(args []string) {
 			return
 		}
 		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "NAME\tTYPE\tVALUE\tTTL")
+		_, _ = fmt.Fprintln(tw, "NAME\tTYPE\tVALUE\tTTL")
 		for _, z := range zones {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\n", z.Name, z.Type, z.Value, z.TTL)
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%d\n", z.Name, z.Type, z.Value, z.TTL)
 		}
-		tw.Flush()
+		_ = tw.Flush()
 
 	case "add":
 		fs := flag.NewFlagSet("dns add", flag.ExitOnError)
@@ -663,11 +678,11 @@ func RunRoute(args []string) {
 			return
 		}
 		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "CIDR\tEXIT NODE")
+		_, _ = fmt.Fprintln(tw, "CIDR\tEXIT NODE")
 		for _, r := range routes {
-			fmt.Fprintf(tw, "%s\t%s\n", r.CIDR, r.NodeID)
+			_, _ = fmt.Fprintf(tw, "%s\t%s\n", r.CIDR, r.NodeID)
 		}
-		tw.Flush()
+		_ = tw.Flush()
 
 	case "add":
 		fs := flag.NewFlagSet("route add", flag.ExitOnError)
@@ -675,7 +690,7 @@ func RunRoute(args []string) {
 		_ = fs.Parse(args[1:])
 		rest := fs.Args()
 		if len(rest) != 3 || rest[1] != "via" {
-			fmt.Fprintln(os.Stderr, "Usage: pulse route add <cidr> via <node-id>")
+			_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse route add <cidr> via <node-id>")
 			os.Exit(1)
 		}
 		path := SocketPath([]string{"--socket", *sock})
@@ -689,7 +704,7 @@ func RunRoute(args []string) {
 		sock := fs.String("socket", "", "control socket path")
 		_ = fs.Parse(args[1:])
 		if fs.NArg() < 1 {
-			fmt.Fprintln(os.Stderr, "Usage: pulse route remove <cidr>")
+			_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse route remove <cidr>")
 			os.Exit(1)
 		}
 		path := SocketPath([]string{"--socket", *sock})
@@ -746,7 +761,7 @@ func RunToken(args []string) {
 			return
 		}
 		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "VALUE\tCREATED\tEXPIRES\tMAX\tUSED\tSTATUS")
+		_, _ = fmt.Fprintln(tw, "VALUE\tCREATED\tEXPIRES\tMAX\tUSED\tSTATUS")
 		for _, t := range tokens {
 			expires := "never"
 			if !t.ExpiresAt.IsZero() {
@@ -762,17 +777,17 @@ func RunToken(args []string) {
 			} else if t.IsExhausted() {
 				status = "exhausted"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
 				t.Value[:16]+"...", t.CreatedAt.Format(time.RFC3339), expires, maxStr, t.UseCount, status)
 		}
-		tw.Flush()
+		_ = tw.Flush()
 
 	case "revoke":
 		fs := flag.NewFlagSet("token revoke", flag.ExitOnError)
 		sock := fs.String("socket", "", "control socket path")
 		_ = fs.Parse(args[1:])
 		if fs.NArg() < 1 {
-			fmt.Fprintln(os.Stderr, "Usage: pulse token revoke <prefix>")
+			_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse token revoke <prefix>")
 			os.Exit(1)
 		}
 		path := SocketPath([]string{"--socket", *sock})
@@ -794,15 +809,15 @@ func RunConnect(args []string) {
 	destAddr := fs.String("dest", "", "destination address on target node (required)")
 	_ = fs.Parse(args)
 	if *nodeID == "" || *destAddr == "" {
-		fmt.Fprintln(os.Stderr, "pulse connect: --node and --dest are required")
+		_, _ = fmt.Fprintln(os.Stderr, "pulse connect: --node and --dest are required")
 		os.Exit(1)
 	}
 	conn, err := client.Dial(*pulseAddr, *nodeID, *destAddr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pulse connect: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "pulse connect: %v\n", err)
 		os.Exit(1)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	done := make(chan struct{}, 2)
 	go func() {
 		buf := make([]byte, 32*1024)
@@ -822,7 +837,7 @@ func RunConnect(args []string) {
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
-				os.Stdout.Write(buf[:n])
+				_, _ = os.Stdout.Write(buf[:n])
 			}
 			if err != nil {
 				break
@@ -841,7 +856,7 @@ func RunForward(args []string) {
 	localAddr := fs.String("local", "", "local listen address, e.g. :3389 (required)")
 	_ = fs.Parse(args)
 	if *nodeID == "" || *destAddr == "" || *localAddr == "" {
-		fmt.Fprintln(os.Stderr, "pulse forward: --node, --dest and --local are required")
+		_, _ = fmt.Fprintln(os.Stderr, "pulse forward: --node, --dest and --local are required")
 		os.Exit(1)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -892,7 +907,7 @@ func RunCASign(args []string) {
 
 func RunPin(args []string) {
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: pulse pin <node-id> <via-relay-id>")
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse pin <node-id> <via-relay-id>")
 		os.Exit(1)
 	}
 	sock := SocketPath(args[2:])
@@ -904,7 +919,7 @@ func RunPin(args []string) {
 
 func RunUnpin(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: pulse unpin <node-id>")
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse unpin <node-id>")
 		os.Exit(1)
 	}
 	sock := SocketPath(args[1:])
@@ -916,7 +931,7 @@ func RunUnpin(args []string) {
 
 func RunRestart(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: pulse restart <node-id>")
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse restart <node-id>")
 		os.Exit(1)
 	}
 	sock := SocketPath(args[1:])
@@ -952,7 +967,7 @@ func RunGroups(args []string) {
 
 func RunTemplate(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: pulse template <list|add|remove>")
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse template <list|add|remove>")
 		os.Exit(1)
 	}
 	sock := SocketPath(args[1:])
@@ -972,7 +987,7 @@ func RunTemplate(args []string) {
 
 func RunBulk(args []string) {
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: pulse bulk <tag-pattern> <restart|push_config>")
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse bulk <tag-pattern> <restart|push_config>")
 		os.Exit(1)
 	}
 	sock := SocketPath(args[2:])
@@ -1045,7 +1060,7 @@ var pulseCommands = []string{
 
 func RunCompletion(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: pulse completion <bash|zsh|fish>")
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse completion <bash|zsh|fish>")
 		os.Exit(1)
 	}
 	cmds := strings.Join(pulseCommands, " ")
@@ -1073,7 +1088,7 @@ compdef _pulse pulse
 			fmt.Printf("complete -c pulse -n '__fish_use_subcommand' -a '%s'\n", cmd)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown shell: %s (use bash, zsh, or fish)\n", args[0])
+		_, _ = fmt.Fprintf(os.Stderr, "unknown shell: %s (use bash, zsh, or fish)\n", args[0])
 		os.Exit(1)
 	}
 }

@@ -46,21 +46,21 @@ func (s *Scribe) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Peer counts.
-	fmt.Fprintf(&b, "# HELP pulse_peers_total Total known peers in gossip table.\n")
-	fmt.Fprintf(&b, "# TYPE pulse_peers_total gauge\n")
-	fmt.Fprintf(&b, "pulse_peers_total %d\n", len(peers))
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_peers_total Total known peers in gossip table.\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_peers_total gauge\n")
+	_, _ = fmt.Fprintf(&b, "pulse_peers_total %d\n", len(peers))
 
-	fmt.Fprintf(&b, "# HELP pulse_peers_connected Peers with active sessions.\n")
-	fmt.Fprintf(&b, "# TYPE pulse_peers_connected gauge\n")
-	fmt.Fprintf(&b, "pulse_peers_connected %d\n", len(connected))
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_peers_connected Peers with active sessions.\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_peers_connected gauge\n")
+	_, _ = fmt.Fprintf(&b, "pulse_peers_connected %d\n", len(connected))
 
 	// Per-peer metrics.
-	fmt.Fprintf(&b, "# HELP pulse_peer_latency_ms Measured RTT to peer in milliseconds.\n")
-	fmt.Fprintf(&b, "# TYPE pulse_peer_latency_ms gauge\n")
-	fmt.Fprintf(&b, "# HELP pulse_peer_loss_ratio Packet loss ratio to peer (0-1).\n")
-	fmt.Fprintf(&b, "# TYPE pulse_peer_loss_ratio gauge\n")
-	fmt.Fprintf(&b, "# HELP pulse_peer_hop_count Hop count to peer.\n")
-	fmt.Fprintf(&b, "# TYPE pulse_peer_hop_count gauge\n")
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_peer_latency_ms Measured RTT to peer in milliseconds.\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_peer_latency_ms gauge\n")
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_peer_loss_ratio Packet loss ratio to peer (0-1).\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_peer_loss_ratio gauge\n")
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_peer_hop_count Hop count to peer.\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_peer_hop_count gauge\n")
 	for _, p := range peers {
 		if p.NodeID == s.node.id {
 			continue
@@ -71,15 +71,15 @@ func (s *Scribe) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 		labels := fmt.Sprintf(`node_id=%q,name=%q`, p.NodeID, name)
 		if p.LatencyMS > 0 && p.LatencyMS < 1e15 {
-			fmt.Fprintf(&b, "pulse_peer_latency_ms{%s} %.2f\n", labels, p.LatencyMS)
+			_, _ = fmt.Fprintf(&b, "pulse_peer_latency_ms{%s} %.2f\n", labels, p.LatencyMS)
 		}
-		fmt.Fprintf(&b, "pulse_peer_loss_ratio{%s} %.4f\n", labels, p.LossRate)
-		fmt.Fprintf(&b, "pulse_peer_hop_count{%s} %d\n", labels, p.HopCount)
+		_, _ = fmt.Fprintf(&b, "pulse_peer_loss_ratio{%s} %.4f\n", labels, p.LossRate)
+		_, _ = fmt.Fprintf(&b, "pulse_peer_hop_count{%s} %d\n", labels, p.HopCount)
 	}
 
 	// Per-peer link type: "direct_quic", "quic", "websocket", or "none".
-	fmt.Fprintf(&b, "# HELP pulse_peer_link_type Active link type to peer (label).\n")
-	fmt.Fprintf(&b, "# TYPE pulse_peer_link_type gauge\n")
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_peer_link_type Active link type to peer (label).\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_peer_link_type gauge\n")
 	for _, p := range peers {
 		if p.NodeID == s.node.id {
 			continue
@@ -99,22 +99,22 @@ func (s *Scribe) handleMetrics(w http.ResponseWriter, r *http.Request) {
 				linkType = "websocket"
 			}
 		}
-		fmt.Fprintf(&b, "pulse_peer_link_type{node_id=%q,name=%q,type=%q} 1\n", p.NodeID, name, linkType)
+		_, _ = fmt.Fprintf(&b, "pulse_peer_link_type{node_id=%q,name=%q,type=%q} 1\n", p.NodeID, name, linkType)
 	}
 
 	// Node info (constant 1, labels carry metadata).
-	fmt.Fprintf(&b, "# HELP pulse_node_info Node metadata.\n")
-	fmt.Fprintf(&b, "# TYPE pulse_node_info gauge\n")
-	fmt.Fprintf(&b, "pulse_node_info{node_id=%q,network_id=%q} 1\n",
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_node_info Node metadata.\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_node_info gauge\n")
+	_, _ = fmt.Fprintf(&b, "pulse_node_info{node_id=%q,network_id=%q} 1\n",
 		s.node.id, s.node.cfg.Node.NetworkID)
 
 	// Cert expiry.
 	if len(s.node.identity.TLSCert.Certificate) > 0 {
 		if leaf, err := parseLeafCert(s.node.identity.TLSCert); err == nil {
 			remaining := time.Until(leaf.NotAfter).Seconds()
-			fmt.Fprintf(&b, "# HELP pulse_cert_expiry_seconds Seconds until node cert expires.\n")
-			fmt.Fprintf(&b, "# TYPE pulse_cert_expiry_seconds gauge\n")
-			fmt.Fprintf(&b, "pulse_cert_expiry_seconds %.0f\n", remaining)
+			_, _ = fmt.Fprintf(&b, "# HELP pulse_cert_expiry_seconds Seconds until node cert expires.\n")
+			_, _ = fmt.Fprintf(&b, "# TYPE pulse_cert_expiry_seconds gauge\n")
+			_, _ = fmt.Fprintf(&b, "pulse_cert_expiry_seconds %.0f\n", remaining)
 		}
 	}
 
@@ -141,39 +141,39 @@ func (s *Scribe) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RUnlock()
 
-	fmt.Fprintf(&b, "# HELP pulse_revoked_nodes_total Number of revoked nodes.\n")
-	fmt.Fprintf(&b, "# TYPE pulse_revoked_nodes_total gauge\n")
-	fmt.Fprintf(&b, "pulse_revoked_nodes_total %d\n", revokedCount)
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_revoked_nodes_total Number of revoked nodes.\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_revoked_nodes_total gauge\n")
+	_, _ = fmt.Fprintf(&b, "pulse_revoked_nodes_total %d\n", revokedCount)
 
-	fmt.Fprintf(&b, "# HELP pulse_dns_zones_total Number of DNS zones.\n")
-	fmt.Fprintf(&b, "# TYPE pulse_dns_zones_total gauge\n")
-	fmt.Fprintf(&b, "pulse_dns_zones_total %d\n", dnsCount)
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_dns_zones_total Number of DNS zones.\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_dns_zones_total gauge\n")
+	_, _ = fmt.Fprintf(&b, "pulse_dns_zones_total %d\n", dnsCount)
 
-	fmt.Fprintf(&b, "# HELP pulse_acl_rules_total Number of ACL rules.\n")
-	fmt.Fprintf(&b, "# TYPE pulse_acl_rules_total gauge\n")
-	fmt.Fprintf(&b, "pulse_acl_rules_total %d\n", aclCount)
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_acl_rules_total Number of ACL rules.\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_acl_rules_total gauge\n")
+	_, _ = fmt.Fprintf(&b, "pulse_acl_rules_total %d\n", aclCount)
 
-	fmt.Fprintf(&b, "# HELP pulse_tokens_total Total managed tokens.\n")
-	fmt.Fprintf(&b, "# TYPE pulse_tokens_total gauge\n")
-	fmt.Fprintf(&b, "pulse_tokens_total %d\n", tokenTotal)
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_tokens_total Total managed tokens.\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_tokens_total gauge\n")
+	_, _ = fmt.Fprintf(&b, "pulse_tokens_total %d\n", tokenTotal)
 
-	fmt.Fprintf(&b, "# HELP pulse_tokens_valid Valid (usable) tokens.\n")
-	fmt.Fprintf(&b, "# TYPE pulse_tokens_valid gauge\n")
-	fmt.Fprintf(&b, "pulse_tokens_valid %d\n", tokenValid)
+	_, _ = fmt.Fprintf(&b, "# HELP pulse_tokens_valid Valid (usable) tokens.\n")
+	_, _ = fmt.Fprintf(&b, "# TYPE pulse_tokens_valid gauge\n")
+	_, _ = fmt.Fprintf(&b, "pulse_tokens_valid %d\n", tokenValid)
 
 	// Per-node stats.
 	if len(stats) > 0 {
-		fmt.Fprintf(&b, "# HELP pulse_node_stats_bytes_in Bytes received by node.\n")
-		fmt.Fprintf(&b, "# TYPE pulse_node_stats_bytes_in gauge\n")
-		fmt.Fprintf(&b, "# HELP pulse_node_stats_bytes_out Bytes sent by node.\n")
-		fmt.Fprintf(&b, "# TYPE pulse_node_stats_bytes_out gauge\n")
-		fmt.Fprintf(&b, "# HELP pulse_node_stats_active_conns Active connections on node.\n")
-		fmt.Fprintf(&b, "# TYPE pulse_node_stats_active_conns gauge\n")
+		_, _ = fmt.Fprintf(&b, "# HELP pulse_node_stats_bytes_in Bytes received by node.\n")
+		_, _ = fmt.Fprintf(&b, "# TYPE pulse_node_stats_bytes_in gauge\n")
+		_, _ = fmt.Fprintf(&b, "# HELP pulse_node_stats_bytes_out Bytes sent by node.\n")
+		_, _ = fmt.Fprintf(&b, "# TYPE pulse_node_stats_bytes_out gauge\n")
+		_, _ = fmt.Fprintf(&b, "# HELP pulse_node_stats_active_conns Active connections on node.\n")
+		_, _ = fmt.Fprintf(&b, "# TYPE pulse_node_stats_active_conns gauge\n")
 		for _, st := range stats {
 			labels := fmt.Sprintf(`node_id=%q`, st.NodeID)
-			fmt.Fprintf(&b, "pulse_node_stats_bytes_in{%s} %d\n", labels, st.BytesIn)
-			fmt.Fprintf(&b, "pulse_node_stats_bytes_out{%s} %d\n", labels, st.BytesOut)
-			fmt.Fprintf(&b, "pulse_node_stats_active_conns{%s} %d\n", labels, st.ActiveConns)
+			_, _ = fmt.Fprintf(&b, "pulse_node_stats_bytes_in{%s} %d\n", labels, st.BytesIn)
+			_, _ = fmt.Fprintf(&b, "pulse_node_stats_bytes_out{%s} %d\n", labels, st.BytesOut)
+			_, _ = fmt.Fprintf(&b, "pulse_node_stats_active_conns{%s} %d\n", labels, st.ActiveConns)
 		}
 	}
 

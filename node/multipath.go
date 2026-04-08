@@ -121,7 +121,7 @@ func (m *MultipathSession) startFanIn() {
 				select {
 				case m.fanCh <- conn:
 				case <-m.closeCh:
-					conn.Close()
+					_ = conn.Close()
 					return
 				}
 			}

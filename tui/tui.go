@@ -9,6 +9,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
+	"github.com/leonardomb1/pulse/config"
 	"github.com/leonardomb1/pulse/node"
 )
 
@@ -32,6 +33,7 @@ type App struct {
 	// State
 	selfID    string
 	networkID string
+	meshCIDR  string
 	isScribe  bool
 	peers     []node.PeerEntry
 	dns       []node.DNSZone
@@ -182,6 +184,7 @@ func (a *App) refresh() {
 		_ = json.Unmarshal(resp["self"], &a.selfID)
 		_ = json.Unmarshal(resp["peers"], &a.peers)
 		_ = json.Unmarshal(resp["network_id"], &a.networkID)
+		_ = json.Unmarshal(resp["mesh_cidr"], &a.meshCIDR)
 		if statsRaw, ok := resp["stats"]; ok {
 			_ = json.Unmarshal(statsRaw, &a.stats)
 		}
@@ -211,12 +214,19 @@ func (a *App) refresh() {
 	}
 }
 
+func (a *App) activeMeshCIDR() string {
+	if a.meshCIDR != "" {
+		return a.meshCIDR
+	}
+	return config.DefaultMeshCIDR
+}
+
 func (a *App) renderTopBar(page string) {
 	if a.selfID == "" {
 		a.topBar.SetText(" [white:darkgreen:b]pulse[-:-:-] connecting...")
 		return
 	}
-	meshIP := node.MeshIPFromNodeID(a.selfID)
+	meshIP := node.MeshIPFromNodeIDWithCIDR(a.selfID, a.activeMeshCIDR())
 	roles := ""
 	for _, p := range a.peers {
 		if p.NodeID == a.selfID {

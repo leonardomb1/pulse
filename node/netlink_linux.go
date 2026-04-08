@@ -31,7 +31,7 @@ func netlinkRouteAdd(cidr string, ifIndex int) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	_ = unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK})
 
 	// Build RTM_NEWROUTE message.
@@ -79,7 +79,7 @@ func netlinkRouteDel(cidr string, ifIndex int) {
 	if err != nil {
 		return
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	_ = unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK})
 
 	msg := make([]byte, 0, 128)
@@ -158,7 +158,7 @@ func defaultInterface() string {
 	if err != nil {
 		return ""
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	_ = unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK})
 
 	// Build RTM_GETROUTE for destination 0.0.0.0 (default route).
@@ -240,7 +240,7 @@ func nftMasquerade(meshCIDR, extIface string) error {
 	if err != nil {
 		return fmt.Errorf("netlink socket: %w", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return fmt.Errorf("bind: %w", err)
 	}

@@ -68,7 +68,7 @@ func (s *SOCKSServer) ListenAndServe(ctx context.Context) error {
 	Infof("SOCKS5 proxy on %s (.pulse routing enabled)", s.listenAddr)
 	go func() {
 		<-ctx.Done()
-		ln.Close()
+		_ = ln.Close()
 	}()
 	for {
 		conn, err := ln.Accept()
@@ -86,7 +86,7 @@ func (s *SOCKSServer) ListenAndServe(ctx context.Context) error {
 }
 
 func (s *SOCKSServer) handleConn(client net.Conn) {
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	host, port, err := s.socks5Handshake(client)
 	if err != nil {
@@ -112,7 +112,7 @@ func (s *SOCKSServer) handleConn(client net.Conn) {
 			Infof("socks5: direct dial %s: %v", destAddr, err)
 			return
 		}
-		defer target.Close()
+		defer func() { _ = target.Close() }()
 		setTCPOpts(target)
 		BridgeDirectCounted(client, target, s.traffic)
 		return
@@ -124,7 +124,7 @@ func (s *SOCKSServer) handleConn(client net.Conn) {
 		Infof("socks5: open stream: %v", err)
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// destNodeID and destAddr are already correctly resolved by resolveDest.
 	// For .pulse domains destAddr encodes the in-mesh service address

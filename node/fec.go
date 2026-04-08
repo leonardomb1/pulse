@@ -22,22 +22,33 @@ import (
 )
 
 const (
-	fecGroupSize   = 10 // data packets per FEC group
-	fecFrameData   = 0
-	fecFrameParity = 1
-	fecHeaderSize  = 8 // type(1) + groupID(2) + index(1) + length(4)
+	fecDefaultGroupSize = 10 // data packets per FEC group (legacy default)
+	fecFrameData        = 0
+	fecFrameParity      = 1
+	fecHeaderSize       = 8 // type(1) + groupID(2) + index(1) + length(4)
 )
 
 // fecEncoder generates parity packets for outbound TUN traffic.
 type fecEncoder struct {
-	groupID uint16
-	idx     int
-	parity  []byte
-	maxLen  int // longest packet in this group (parity must be this long)
+	groupID   uint16
+	idx       int
+	groupSize int // data packets per FEC group
+	parity    []byte
+	maxLen    int // longest packet in this group (parity must be this long)
 }
 
-func NewFECEncoder() *fecEncoder {
-	return &fecEncoder{parity: make([]byte, 65535)}
+// NewFECEncoder creates an encoder with the given group size.
+// Use groupSize=0 to get the default (10).
+func NewFECEncoder(groupSize int) *fecEncoder {
+	if groupSize <= 0 {
+		groupSize = fecDefaultGroupSize
+	}
+	return &fecEncoder{groupSize: groupSize, parity: make([]byte, 65535)}
+}
+
+// GroupSize returns the current group size of the encoder.
+func (e *fecEncoder) GroupSize() int {
+	return e.groupSize
 }
 
 // AddAndWrite writes a data packet with FEC header to w.
@@ -55,15 +66,20 @@ func (e *fecEncoder) AddAndWrite(w io.Writer, pkt []byte) (parityReady bool, err
 	xorInto(e.parity[:e.maxLen], pkt)
 
 	e.idx++
-	if e.idx >= fecGroupSize {
+	if e.idx >= e.groupSize {
 		parityReady = true
 	}
 	return
 }
 
 // FlushParity writes the parity packet and resets for the next group.
+// The index byte encodes the group size: index = 128 + groupSize.
+// Legacy decoders see index >= 128 which is not a valid data index, so they
+// treat it as parity. New decoders extract groupSize = index - 128.
+// Special case: index=255 is the legacy encoding (groupSize=10).
 func (e *fecEncoder) FlushParity(w io.Writer) error {
-	err := fecFrameWrite(w, fecFrameParity, e.groupID, 255, e.parity[:e.maxLen])
+	idx := byte(128 + e.groupSize)
+	err := fecFrameWrite(w, fecFrameParity, e.groupID, idx, e.parity[:e.maxLen])
 	e.groupID++
 	e.idx = 0
 	e.maxLen = 0
@@ -73,20 +89,37 @@ func (e *fecEncoder) FlushParity(w io.Writer) error {
 	return err
 }
 
+// Pending returns true if the encoder has buffered data packets that haven't
+// been flushed as parity yet (partial group).
+func (e *fecEncoder) Pending() bool {
+	return e.idx > 0
+}
+
 // fecDecoder reconstructs lost packets from parity.
 type fecDecoder struct {
 	groups map[uint16]*fecGroup
 }
 
 type fecGroup struct {
-	packets  [fecGroupSize][]byte // nil = not yet received
-	parity   []byte
-	received int
-	maxLen   int
+	packets      [][]byte // nil slots = not yet received; grown as needed
+	parity       []byte
+	received     int
+	expectedSize int // group size (set when parity arrives); 0 = unknown
+	maxLen       int
 }
 
 func NewFECDecoder() *fecDecoder {
 	return &fecDecoder{groups: make(map[uint16]*fecGroup)}
+}
+
+// fecParityGroupSize extracts the group size from a parity frame's index byte.
+//   - index == 255: legacy encoding, group size = 10
+//   - index >= 128: new encoding, group size = index - 128
+func fecParityGroupSize(index byte) int {
+	if index == 255 {
+		return fecDefaultGroupSize // legacy
+	}
+	return int(index) - 128
 }
 
 // Add processes a received FEC frame. Returns a reconstructed packet if one
@@ -98,11 +131,18 @@ func (d *fecDecoder) Add(frameType byte, groupID uint16, index byte, payload []b
 		d.groups[groupID] = g
 	}
 
-	if frameType == fecFrameData && int(index) < fecGroupSize {
-		if g.packets[index] == nil {
+	if frameType == fecFrameData && index < 128 {
+		idx := int(index)
+		// Grow packets slice if needed.
+		if idx >= len(g.packets) {
+			newSlice := make([][]byte, idx+1)
+			copy(newSlice, g.packets)
+			g.packets = newSlice
+		}
+		if g.packets[idx] == nil {
 			cp := make([]byte, len(payload))
 			copy(cp, payload)
-			g.packets[index] = cp
+			g.packets[idx] = cp
 			g.received++
 			if len(payload) > g.maxLen {
 				g.maxLen = len(payload)
@@ -112,15 +152,23 @@ func (d *fecDecoder) Add(frameType byte, groupID uint16, index byte, payload []b
 		cp := make([]byte, len(payload))
 		copy(cp, payload)
 		g.parity = cp
+		g.expectedSize = fecParityGroupSize(index)
 		if len(payload) > g.maxLen {
 			g.maxLen = len(payload)
 		}
 	}
 
-	// Try to recover: need exactly N-1 data packets + parity.
-	if g.parity != nil && g.received == fecGroupSize-1 {
+	// Try to recover: need exactly N-1 data packets + parity, and we must
+	// know the expected group size (from parity frame).
+	if g.parity != nil && g.expectedSize > 0 && g.received == g.expectedSize-1 {
+		// Ensure packets slice covers the full group.
+		if len(g.packets) < g.expectedSize {
+			newSlice := make([][]byte, g.expectedSize)
+			copy(newSlice, g.packets)
+			g.packets = newSlice
+		}
 		missing := -1
-		for i := 0; i < fecGroupSize; i++ {
+		for i := 0; i < g.expectedSize; i++ {
 			if g.packets[i] == nil {
 				missing = i
 				break
@@ -129,7 +177,7 @@ func (d *fecDecoder) Add(frameType byte, groupID uint16, index byte, payload []b
 		if missing >= 0 {
 			recovered := make([]byte, g.maxLen)
 			copy(recovered, g.parity)
-			for i := 0; i < fecGroupSize; i++ {
+			for i := 0; i < g.expectedSize; i++ {
 				if i != missing && g.packets[i] != nil {
 					xorInto(recovered, g.packets[i])
 				}
@@ -139,8 +187,8 @@ func (d *fecDecoder) Add(frameType byte, groupID uint16, index byte, payload []b
 		}
 	}
 
-	// Cleanup complete groups.
-	if g.received == fecGroupSize {
+	// Cleanup complete groups (all data received, no recovery needed).
+	if g.expectedSize > 0 && g.received >= g.expectedSize {
 		delete(d.groups, groupID)
 	}
 
@@ -154,11 +202,33 @@ func (d *fecDecoder) Add(frameType byte, groupID uint16, index byte, payload []b
 	return nil
 }
 
+// FECGroupSizeForLoss returns the optimal FEC group size for a given packet
+// loss rate. Returns 0 to disable FEC when loss is negligible.
+func FECGroupSizeForLoss(lossRate float64) int {
+	switch {
+	case lossRate < 0.01:
+		return 0 // FEC disabled — negligible loss
+	case lossRate < 0.05:
+		return 20 // ~5% overhead
+	case lossRate < 0.10:
+		return 10 // ~10% overhead
+	case lossRate < 0.20:
+		return 5 // ~20% overhead
+	default:
+		return 3 // ~33% overhead — high loss environment
+	}
+}
+
 // xorInto XORs src into dst (dst ^= src). dst must be >= len(src).
 func xorInto(dst, src []byte) {
 	for i := 0; i < len(src) && i < len(dst); i++ {
 		dst[i] ^= src[i]
 	}
+}
+
+// ExportFECFrameWrite is an exported alias for fecFrameWrite, used by tests.
+func ExportFECFrameWrite(w io.Writer, frameType byte, groupID uint16, index byte, payload []byte) error {
+	return fecFrameWrite(w, frameType, groupID, index, payload)
 }
 
 // fecFrameWrite writes a single FEC-framed packet.

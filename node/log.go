@@ -71,7 +71,7 @@ func (w *RotatingWriter) Write(p []byte) (int, error) {
 	n, err := w.f.Write(p)
 	w.size += int64(n)
 	if w.size >= logMaxBytes {
-		w.f.Close()
+		_ = w.f.Close()
 		_ = os.Rename(w.path, w.path+".1")
 		f, ferr := os.OpenFile(w.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if ferr == nil {

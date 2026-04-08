@@ -63,7 +63,7 @@ func TestEventLogSubscribe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer el.Close()
+	defer func() { _ = el.Close() }()
 
 	ch := el.Subscribe()
 	defer el.Unsubscribe(ch)

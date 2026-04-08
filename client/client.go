@@ -54,7 +54,7 @@ func DialContext(ctx context.Context, pulseAddr, destNode, destAddr string) (net
 	hdr, _ := json.Marshal(tunnelRequest{DestNode: destNode, DestAddr: destAddr})
 	hdr = append(hdr, '\n')
 	if _, err := conn.Write(hdr); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("pulse: send header: %w", err)
 	}
 
@@ -85,11 +85,11 @@ func (f *Forwarder) ListenAndServe(ctx context.Context, localAddr string) error 
 	if err != nil {
 		return fmt.Errorf("pulse forwarder: listen %s: %w", localAddr, err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	go func() {
 		<-ctx.Done()
-		ln.Close()
+		_ = ln.Close()
 	}()
 
 	for {
@@ -107,13 +107,13 @@ func (f *Forwarder) ListenAndServe(ctx context.Context, localAddr string) error 
 }
 
 func (f *Forwarder) handle(local net.Conn) {
-	defer local.Close()
+	defer func() { _ = local.Close() }()
 
 	remote, err := DialContext(context.Background(), f.pulseAddr, f.destNode, f.destAddr)
 	if err != nil {
 		return
 	}
-	defer remote.Close()
+	defer func() { _ = remote.Close() }()
 
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {

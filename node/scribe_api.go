@@ -55,7 +55,7 @@ func (s *Scribe) handleStatus(w http.ResponseWriter, r *http.Request) {
 		ACLRules:   aclRules,
 		ScribeID:   s.node.id,
 		NetworkID:  s.node.cfg.Node.NetworkID,
-		MeshCIDR:   s.node.cfg.Tun.CIDR,
+		MeshCIDR:   s.node.meshCIDR(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)

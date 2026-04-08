@@ -242,7 +242,7 @@ func (p *Prober) probePeer(link *PeerLink) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(probeTimeout))
 
 	sentAt := time.Now()

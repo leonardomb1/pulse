@@ -147,7 +147,7 @@ func (m *NATManager) whoami(ctx context.Context, relayAddr string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
 	return string(body), err
 }
@@ -236,7 +236,7 @@ func (m *NATManager) punchPeer(ctx context.Context, entry PeerEntry, targetAddr 
 	_ = conn.SetReadDeadline(time.Now().Add(punchAckTimeout))
 	buf := make([]byte, 512)
 	n, err := conn.Read(buf)
-	conn.Close()
+	_ = conn.Close()
 	if err != nil || n == 0 {
 		Debugf("NAT punch to %s: no ack received", entry.NodeID)
 		return
@@ -341,7 +341,7 @@ func (m *NATManager) probeWindow(ctx context.Context, addr string) (Session, err
 					case won <- result{session: sess}:
 						cancel() // stop further probes
 					default:
-						sess.Close() // another probe already won
+						_ = sess.Close() // another probe already won
 					}
 				}
 			}()

@@ -57,6 +57,11 @@ type PeerEntry struct {
 	Name string   `json:"name,omitempty"`
 	Tags []string `json:"tags,omitempty"`
 
+	// MetaVersion is a monotonic counter incremented when self-metadata
+	// (MeshIP, Name, Tags) changes. It allows metadata updates to flow
+	// through gossip even past hop-0 protection.
+	MetaVersion uint64 `json:"meta_version,omitempty"`
+
 	// Internal version stamp for delta-gossip (not serialized over the wire).
 	tableVersion uint64 `json:"-"`
 }
@@ -98,6 +103,19 @@ func (t *Table) Upsert(e PeerEntry) {
 	// replaced by another hop-0 entry or a lower hop count — never by gossip
 	// which always arrives at hop >= 1. The pruner handles dead direct links.
 	if existing.HopCount == 0 && e.HopCount > 0 {
+		// Allow metadata updates through gossip if MetaVersion is newer.
+		if e.MetaVersion > existing.MetaVersion {
+			// Preserve routing fields from the direct-link entry.
+			e.Addr = existing.Addr
+			e.PublicKey = existing.PublicKey
+			e.HopCount = existing.HopCount
+			e.LatencyMS = existing.LatencyMS
+			e.LossRate = existing.LossRate
+			e.LinkType = existing.LinkType
+			t.version++
+			e.tableVersion = t.version
+			t.entries[e.NodeID] = e
+		}
 		return
 	}
 	if e.LastSeen.After(existing.LastSeen) || e.HopCount < existing.HopCount {

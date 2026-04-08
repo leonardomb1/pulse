@@ -59,24 +59,24 @@ func (s *ControlServer) ListenAndServe(ctx context.Context) error {
 	// Check if another daemon is already running by trying to connect.
 	// Only remove the socket if it's stale (no one listening).
 	if conn, err := net.DialTimeout("unix", s.socketPath, 500*time.Millisecond); err == nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("control: another pulse daemon is already running (socket %s is active)", s.socketPath)
 	}
-	os.Remove(s.socketPath) // remove stale socket from previous run
+	_ = os.Remove(s.socketPath) // remove stale socket from previous run
 
 	ln, err := net.Listen("unix", s.socketPath)
 	if err != nil {
 		return fmt.Errorf("control: listen %s: %w", s.socketPath, err)
 	}
 	if err := os.Chmod(s.socketPath, 0600); err != nil {
-		ln.Close()
+		_ = ln.Close()
 		return fmt.Errorf("control: chmod socket: %w", err)
 	}
 
 	Infof("control socket: %s", s.socketPath)
 	go func() {
 		<-ctx.Done()
-		ln.Close()
+		_ = ln.Close()
 	}()
 
 	for {
@@ -132,7 +132,7 @@ type ctrlResponse struct {
 }
 
 func (s *ControlServer) handle(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	var req ctrlRequest
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&req); err != nil {
@@ -194,6 +194,8 @@ func (s *ControlServer) handle(conn net.Conn) {
 	case "logs":
 		s.cmdLogs(conn)
 		return // cmdLogs takes ownership of conn
+	case "mesh-cidr":
+		s.write(conn, map[string]string{"mesh_cidr": s.node.meshCIDR()})
 	case "stop":
 		s.write(conn, ctrlResponse{OK: true})
 		s.node.Stop()
@@ -233,7 +235,7 @@ func (s *ControlServer) cmdStatus(conn net.Conn) {
 		"self":       s.node.id,
 		"peers":      peers,
 		"network_id": s.node.cfg.Node.NetworkID,
-		"mesh_cidr":  s.node.cfg.Tun.CIDR,
+		"mesh_cidr":  s.node.meshCIDR(),
 	}
 	// Include per-node traffic stats when this node is the scribe.
 	if s.node.scribe != nil {
@@ -555,7 +557,7 @@ func (s *ControlServer) cmdEvents(conn net.Conn, req ctrlRequest) {
 func (s *ControlServer) cmdLogs(conn net.Conn) {
 	if s.node.events == nil {
 		s.write(conn, ctrlResponse{Error: "event log not available"})
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 	ch := s.node.events.Subscribe()

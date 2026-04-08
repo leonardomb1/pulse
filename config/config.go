@@ -2,6 +2,9 @@ package config
 
 import "os"
 
+// DefaultMeshCIDR is the default mesh IP range used when no --mesh-cidr is specified.
+const DefaultMeshCIDR = "10.100.0.0/16"
+
 type Config struct {
 	Node      NodeConfig
 	Bootstrap BootstrapConfig
@@ -109,7 +112,7 @@ func Defaults() *Config {
 		},
 		Tun: TunConfig{
 			Name:   "pulse0",
-			CIDR:   "10.100.0.0/16",
+			CIDR:   DefaultMeshCIDR,
 			Queues: 1,
 		},
 		Persist: PersistConfig{

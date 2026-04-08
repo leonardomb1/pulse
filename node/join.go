@@ -12,7 +12,7 @@ import (
 )
 
 func (n *Node) handleJoinConn(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	reader := bufio.NewReader(conn)
 	line, err := reader.ReadString('\n')
 	if err != nil {
@@ -43,7 +43,7 @@ func (n *Node) resolveJoin(req JoinRequest) JoinResponse {
 	if err != nil {
 		return JoinResponse{Error: fmt.Sprintf("open stream to CA: %v", err)}
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	fwd, _ := json.Marshal(streamMsg{Type: "join", JoinReq: &req})
 	_, _ = conn.Write(append(fwd, '\n'))
@@ -67,13 +67,13 @@ func Join(ctx context.Context, relayAddr string, req JoinRequest) (*JoinResponse
 	if err != nil {
 		return nil, fmt.Errorf("connect to relay: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	conn, err := session.Open()
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	msg, _ := json.Marshal(streamMsg{Type: "join", JoinReq: &req})
 	_, _ = conn.Write(append(msg, '\n'))

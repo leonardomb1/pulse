@@ -108,7 +108,7 @@ func (t *ExitRouteTable) Lookup(ip net.IP) string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	var bestNode string
-	var bestOnes int = -1
+	var bestOnes = -1
 	for _, r := range t.routes {
 		if r.net != nil && r.net.Contains(ip) {
 			ones, _ := r.net.Mask.Size()

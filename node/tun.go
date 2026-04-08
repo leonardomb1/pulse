@@ -3,7 +3,7 @@ package node
 import (
 	"context"
 	"encoding/binary"
-	"encoding/hex"
+	"hash/fnv"
 	"io"
 	"net"
 	"sync"
@@ -16,6 +16,7 @@ type TunDevice interface {
 	HandleInbound(conn net.Conn) // legacy one-shot stream (pre-pipe fallback)
 	RunPipe(nodeID string, conn net.Conn)
 	RefreshMeshIPs()
+	UpdateMeshCIDR(newCIDR string) bool // reconfigure TUN IP+route when mesh CIDR changes; returns true if changed
 }
 
 // MeshIPFromNodeID derives a deterministic mesh IP from a node ID string
@@ -26,6 +27,8 @@ func MeshIPFromNodeID(nodeID string) net.IP {
 }
 
 // MeshIPFromNodeIDWithCIDR derives a mesh IP within the given CIDR.
+// It uses FNV-1a hash of the full nodeID for good distribution and avoids
+// both the network address (host 0) and broadcast address (max host).
 func MeshIPFromNodeIDWithCIDR(nodeID, cidr string) net.IP {
 	_, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
@@ -38,40 +41,37 @@ func MeshIPFromNodeIDWithCIDR(nodeID, cidr string) net.IP {
 		ip[3] = 1
 		return ip
 	}
-	b, err := hex.DecodeString(nodeID[:4])
-	if err != nil || len(b) < 2 {
+
+	prefix := ipNet.IP.To4()
+	mask := ipNet.Mask
+	ones, bits := mask.Size()
+	hostBits := bits - ones
+
+	// maxHost is the number of usable host addresses (excluding network and broadcast).
+	// For /24: 2^8 - 2 = 254, for /16: 2^16 - 2 = 65534.
+	maxHost := (uint32(1) << hostBits) - 2
+	if maxHost == 0 {
+		// /31 or /32 — can't meaningfully assign
 		ip := make(net.IP, 4)
-		copy(ip, ipNet.IP.To4())
+		copy(ip, prefix)
 		ip[3] = 1
 		return ip
 	}
 
-	prefix := ipNet.IP.To4()
-	mask := ipNet.Mask
-	ones, _ := mask.Size()
+	// FNV-1a hash of the full nodeID for good distribution.
+	h := fnv.New32a()
+	h.Write([]byte(nodeID))
+	hash := h.Sum32()
 
-	// Build host bits from nodeID hash, apply to network prefix.
+	// hostNum in [1, maxHost] — avoids 0 (network) and maxHost+1 (broadcast).
+	hostNum := (hash % maxHost) + 1
+
+	// Convert prefix to uint32, add hostNum, convert back to IP.
+	netAddr := binary.BigEndian.Uint32(prefix)
+	ipVal := netAddr + hostNum
+
 	ip := make(net.IP, 4)
-	copy(ip, prefix)
-
-	// For /16: bytes 2-3 are host. For /24: byte 3 is host. For /8: bytes 1-3.
-	switch {
-	case ones <= 8:
-		ip[1] = b[0]
-		ip[2] = b[1]
-		ip[3] = b[0] ^ b[1]
-	case ones <= 16:
-		ip[2] = b[0]
-		ip[3] = b[1]
-	case ones <= 24:
-		ip[3] = b[0]
-	}
-
-	// Avoid network address (all zeros host) and broadcast (all ones host).
-	if ip.Equal(ipNet.IP) {
-		ip[3] |= 1
-	}
-
+	binary.BigEndian.PutUint32(ip, ipVal)
 	return ip
 }
 

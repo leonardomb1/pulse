@@ -52,7 +52,7 @@ func TestBridgeDirectCounted(t *testing.T) {
 
 	// Send data from a1 side, close to signal EOF.
 	_, _ = a1.Write(payload)
-	a1.Close()
+	_ = a1.Close()
 
 	// Read from b2 side.
 	buf := make([]byte, 1024)
@@ -62,7 +62,7 @@ func TestBridgeDirectCounted(t *testing.T) {
 	}
 
 	// Close b2 to let the b1→a2 direction finish (EOF).
-	b2.Close()
+	_ = b2.Close()
 
 	// Wait for bridge to finish (both directions must complete).
 	select {

@@ -30,6 +30,7 @@ type streamMsg struct {
 	IsScribe      bool   `json:"is_scribe,omitempty"`
 	ScribeAPIAddr string `json:"scribe_api_addr,omitempty"`
 	MeshIP        string `json:"mesh_ip,omitempty"`
+	MetaVersion   uint64 `json:"meta_version,omitempty"`
 
 	// gossip
 	Entries []PeerEntry `json:"entries,omitempty"`
@@ -255,6 +256,7 @@ func New(cfg *config.Config, ca *CA, version string) (*Node, error) {
 			// Advertise mesh IP in gossip self-entry.
 			if self, ok := table.Get(identity.NodeID); ok {
 				self.MeshIP = MeshIPFromNodeIDWithCIDR(identity.NodeID, cfg.Tun.CIDR).String()
+				self.MetaVersion++
 				table.UpsertForce(self)
 			}
 		}
@@ -486,7 +488,7 @@ func (n *Node) SendRemoteCmd(targetNodeID string, cmd string, config map[string]
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	msg, _ := marshalStreamMsg(streamMsg{
 		Type:         "remote_cmd",
 		RemoteCmd:    cmd,
@@ -593,7 +595,7 @@ func (n *Node) serveWS(ctx context.Context) {
 
 	// /whoami returns the caller's observed public IP:port (for NAT discovery).
 	mux.HandleFunc("/whoami", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, r.RemoteAddr)
+		_, _ = fmt.Fprint(w, r.RemoteAddr)
 	})
 
 	srv := &http.Server{
@@ -659,7 +661,7 @@ func (n *Node) pushGossip() {
 		}
 		peerID := link.NodeID
 		go func(c net.Conn) {
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 			msg := streamMsg{Type: "gossip", Entries: entries}
 			line, _ := json.Marshal(msg)
 			_, _ = c.Write(append(line, '\n'))
@@ -690,7 +692,7 @@ func (n *Node) pushStatsToScribe() {
 		return
 	}
 	go func() {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		stats := NodeStats{
 			NodeID:      n.id,
 			ReportedAt:  time.Now(),

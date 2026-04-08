@@ -31,7 +31,7 @@ func (n *Node) sendHandshake(session Session) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Include mesh IP if tun is active.
 	meshIP := ""
@@ -42,6 +42,10 @@ func (n *Node) sendHandshake(session Session) {
 	scribeAPIAddr := ""
 	if n.cfg.Scribe.Enabled {
 		scribeAPIAddr = n.cfg.Scribe.Listen
+	}
+	var metaVersion uint64
+	if self, ok := n.table.Get(n.id); ok {
+		metaVersion = self.MetaVersion
 	}
 	msg := streamMsg{
 		Type:          "handshake",
@@ -55,6 +59,7 @@ func (n *Node) sendHandshake(session Session) {
 		IsScribe:      n.cfg.Scribe.Enabled,
 		ScribeAPIAddr: scribeAPIAddr,
 		MeshIP:        meshIP,
+		MetaVersion:   metaVersion,
 	}
 	line, _ := json.Marshal(msg)
 	_, _ = conn.Write(append(line, '\n'))
@@ -64,53 +69,53 @@ func (n *Node) dispatchStream(ac *authedConn) {
 	reader := bufio.NewReader(ac)
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		ac.Close()
+		_ = ac.Close()
 		return
 	}
 	var msg streamMsg
 	if err := json.Unmarshal([]byte(line), &msg); err != nil {
-		ac.Close()
+		_ = ac.Close()
 		return
 	}
 
 	// Revocation check: reject any stream (except handshake itself) from a revoked node.
 	if msg.Type != "handshake" && ac.callerNodeID != "" && n.netCfg.isRevoked(ac.callerNodeID) {
 		Warnf("revocation: rejected stream type=%q from %s", msg.Type, ac.callerNodeID)
-		ac.Close()
+		_ = ac.Close()
 		return
 	}
 
 	switch msg.Type {
 	case "handshake":
 		n.handleHandshake(msg, ac)
-		ac.Close()
+		_ = ac.Close()
 
 	case "gossip":
 		n.table.MergeFrom(msg.Entries, n.id)
 		// ACLs from gossip are unsigned — only scribe-signed NetworkConfig ACLs are trusted.
 		Debugf("gossip: merged %d entries", len(msg.Entries))
-		ac.Close()
+		_ = ac.Close()
 
 	case "probe":
 		pong, _ := json.Marshal(streamMsg{Type: "pong", SentAt: msg.SentAt})
 		_, _ = ac.Write(append(pong, '\n'))
-		ac.Close()
+		_ = ac.Close()
 
 	case "join":
 		if msg.JoinReq == nil {
-			ac.Close()
+			_ = ac.Close()
 			return
 		}
 		resp := n.resolveJoin(*msg.JoinReq)
 		reply, _ := json.Marshal(streamMsg{Type: "join_response", JoinResp: &resp})
 		_, _ = ac.Write(append(reply, '\n'))
-		ac.Close()
+		_ = ac.Close()
 
 	case "punch_start":
 		// Reply on the same stream, then probe. Don't close ac here —
 		// HandlePunchStart writes the ack on it before probing.
 		go func() {
-			defer ac.Close()
+			defer func() { _ = ac.Close() }()
 			n.nat.HandlePunchStart(context.Background(),
 				ac, msg.PunchNodeID, msg.PunchAddr, msg.PunchToken)
 		}()
@@ -119,20 +124,20 @@ func (n *Node) dispatchStream(ac *authedConn) {
 		if msg.NetConfig != nil {
 			n.mergeNetConfig(*msg.NetConfig)
 		}
-		ac.Close()
+		_ = ac.Close()
 
 	case "stats":
 		if msg.Stats != nil && n.scribe != nil {
 			n.scribe.AcceptStats(*msg.Stats)
 		}
-		ac.Close()
+		_ = ac.Close()
 
 	case "revoke":
 		// A node forwarding a revoke request to the scribe.
 		if msg.RevokeNodeID != "" && n.scribe != nil {
 			go n.scribe.Revoke(msg.RevokeNodeID)
 		}
-		ac.Close()
+		_ = ac.Close()
 
 	case "tunpipe":
 		// Persistent bidirectional packet pipe — one per peer pair.
@@ -140,7 +145,7 @@ func (n *Node) dispatchStream(ac *authedConn) {
 		if n.tun != nil {
 			n.tun.RunPipe(msg.NodeID, ac.Conn)
 		} else {
-			ac.Close()
+			_ = ac.Close()
 		}
 
 	case "tun":
@@ -148,7 +153,7 @@ func (n *Node) dispatchStream(ac *authedConn) {
 		if n.tun != nil {
 			n.tun.HandleInbound(ac.Conn)
 		} else {
-			ac.Close()
+			_ = ac.Close()
 		}
 
 	case "tunnel":
@@ -159,7 +164,7 @@ func (n *Node) dispatchStream(ac *authedConn) {
 		}
 		if n.netCfg.isRevoked(req.DestNodeID) {
 			Warnf("tunnel: dest %s is revoked — dropping", req.DestNodeID)
-			ac.Close()
+			_ = ac.Close()
 			return
 		}
 		HandleRelayStream(ac.Conn, reader, req, n.id, callerID, n.router, n.aclTable, n.netCfg.nodeMeta, &n.traffic)
@@ -168,15 +173,15 @@ func (n *Node) dispatchStream(ac *authedConn) {
 		if msg.NodeState != nil {
 			n.applyNodeState(*msg.NodeState)
 		}
-		ac.Close()
+		_ = ac.Close()
 
 	case "remote_cmd":
 		n.handleRemoteCmd(msg)
-		ac.Close()
+		_ = ac.Close()
 
 	default:
 		Infof("unknown stream type: %q", msg.Type)
-		ac.Close()
+		_ = ac.Close()
 	}
 }
 
@@ -203,6 +208,18 @@ func (n *Node) mergeNetConfig(snc SignedNetConfig) {
 	Warnf("netconfig: v%d applied (%d revoked, %d dns zones, %d node meta)",
 		snc.Config.Version, len(snc.Config.RevokedIDs), len(snc.Config.DNSZones), len(snc.Config.NodeMeta))
 
+	// If the mesh CIDR changed and TUN is active, reconfigure the interface
+	// and re-announce our new mesh IP to all connected peers. Without the
+	// re-handshake, peers would hold our old mesh IP (direct-link entries at
+	// hop 0 are protected from gossip updates at hop 1+).
+	if snc.Config.MeshCIDR != "" && n.tun != nil {
+		if n.tun.UpdateMeshCIDR(snc.Config.MeshCIDR) {
+			for _, link := range n.registry.All() {
+				go n.sendHandshake(link.session)
+			}
+		}
+	}
+
 	// Overlay node metadata onto gossip table entries.
 	for nodeID, meta := range snc.Config.NodeMeta {
 		if entry, ok := n.table.Get(nodeID); ok {
@@ -211,6 +228,7 @@ func (n *Node) mergeNetConfig(snc SignedNetConfig) {
 			if meta.MeshIP != "" {
 				entry.MeshIP = meta.MeshIP
 			}
+			entry.MetaVersion++
 			n.table.UpsertForce(entry)
 		}
 	}
@@ -236,7 +254,7 @@ func (n *Node) mergeNetConfig(snc SignedNetConfig) {
 			continue
 		}
 		go func(c net.Conn) {
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 			msg, _ := marshalStreamMsg(streamMsg{Type: "netconfig", NetConfig: &snc})
 			_, _ = c.Write(msg)
 		}(conn)
@@ -287,6 +305,7 @@ func (n *Node) handleHandshake(msg streamMsg, ac *authedConn) {
 		IsScribe:      msg.IsScribe,
 		ScribeAPIAddr: msg.ScribeAPIAddr,
 		MeshIP:        msg.MeshIP,
+		MetaVersion:   msg.MetaVersion,
 		Version:       msg.Version,
 		LastSeen:      time.Now(),
 		HopCount:      0,
@@ -310,6 +329,7 @@ func (n *Node) handleHandshake(msg streamMsg, ac *authedConn) {
 			cfg := n.scribe.BuildNodeConfigForPeer(nodeID)
 			n.scribe.PushNodeConfig(nodeID, cfg)
 		}()
+		go n.scribe.detectMeshIPCollisions()
 	}
 
 	// If TUN is active, immediately rebuild the mesh IP→nodeID map so that
@@ -335,7 +355,7 @@ func (n *Node) openTunPipe(nodeID string, session Session) {
 	}
 	hdr, _ := marshalStreamMsg(streamMsg{Type: "tunpipe", NodeID: n.id})
 	if _, err := conn.Write(hdr); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 	n.tun.RunPipe(nodeID, conn)

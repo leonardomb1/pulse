@@ -181,7 +181,7 @@ func dialPeer(ctx context.Context, peerAddr string, tlsCfg *tls.Config, endpoint
 
 	session, err := yamux.Client(wsc, cfg)
 	if err != nil {
-		wsc.Close()
+		_ = wsc.Close()
 		return nil, err
 	}
 	return newYamuxSession(session), nil
@@ -204,7 +204,7 @@ func serveWebSocket(ctx context.Context, w http.ResponseWriter, r *http.Request,
 
 	session, err := yamux.Server(wsc, cfg)
 	if err != nil {
-		wsc.Close()
+		_ = wsc.Close()
 		return
 	}
 

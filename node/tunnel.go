@@ -36,7 +36,7 @@ func ServeTCP(listenAddr string, router *Router, selfID string, isRevoked func(s
 }
 
 func handleClientConn(client net.Conn, router *Router, selfID string, isRevoked func(string) bool, tc *TrafficCounters) {
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	reader := bufio.NewReader(client)
 	line, err := reader.ReadString('\n')
@@ -58,7 +58,7 @@ func handleClientConn(client net.Conn, router *Router, selfID string, isRevoked 
 			Infof("tunnel: local dial %s: %v", req.DestAddr, err)
 			return
 		}
-		defer target.Close()
+		defer func() { _ = target.Close() }()
 		Infof("tunnel: local → %s", req.DestAddr)
 		bridgeCounted(reader, client, target, tc)
 		return
@@ -80,7 +80,7 @@ func handleClientConn(client net.Conn, router *Router, selfID string, isRevoked 
 		Infof("tunnel: open stream: %v", err)
 		return
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	hdr, _ := json.Marshal(streamMsg{
 		Type:       "tunnel",
@@ -99,7 +99,7 @@ func handleClientConn(client net.Conn, router *Router, selfID string, isRevoked 
 // HandleRelayStream is called by the dispatcher when a tunnel stream arrives.
 // callerNodeID is the verified identity of the peer that opened the stream (from TLS CN).
 func HandleRelayStream(stream net.Conn, reader *bufio.Reader, req TunnelRequest, selfID string, callerNodeID string, router *Router, acls *ACLTable, metaLookup MetaLookup, tc *TrafficCounters) {
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	if err := validateDestAddr(req.DestAddr); err != nil {
 		Warnf("relay: %v", err)
@@ -120,7 +120,7 @@ func HandleRelayStream(stream net.Conn, reader *bufio.Reader, req TunnelRequest,
 			Infof("relay: dial %s: %v", req.DestAddr, err)
 			return
 		}
-		defer target.Close()
+		defer func() { _ = target.Close() }()
 		Infof("relay: terminating → %s", req.DestAddr)
 		bridgeCounted(reader, stream, target, tc)
 		return
@@ -145,7 +145,7 @@ func HandleRelayStream(stream net.Conn, reader *bufio.Reader, req TunnelRequest,
 		Infof("relay: open next stream: %v", err)
 		return
 	}
-	defer nextConn.Close()
+	defer func() { _ = nextConn.Close() }()
 
 	hdr, _ := json.Marshal(streamMsg{
 		Type:       "tunnel",

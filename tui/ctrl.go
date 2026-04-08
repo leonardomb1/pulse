@@ -13,7 +13,7 @@ func ctrlDo(socketPath string, cmd interface{}) (map[string]json.RawMessage, err
 	if err != nil {
 		return nil, fmt.Errorf("connect to %s: %w (is pulse running?)", socketPath, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	b, _ := json.Marshal(cmd)
 	_, _ = conn.Write(append(b, '\n'))

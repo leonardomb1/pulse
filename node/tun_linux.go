@@ -28,6 +28,7 @@ type tunManager struct {
 	node     *Node
 	devName  string
 	meshCIDR string
+	cidrMu   sync.Mutex // protects meshCIDR during reconfiguration
 	fds      []*os.File // multi-queue TUN file descriptors
 
 	// Atomic pointer swap — readers never lock.
@@ -65,7 +66,7 @@ func NewTunDevice(n *Node, devName, meshCIDR string) (TunDevice, error) {
 		fd, err := openTunQueue(devName, multiQueue)
 		if err != nil {
 			for _, f := range fds {
-				f.Close()
+				_ = f.Close()
 			}
 			return nil, fmt.Errorf("tun: open %s queue %d: %w", devName, i, err)
 		}
@@ -75,7 +76,7 @@ func NewTunDevice(n *Node, devName, meshCIDR string) (TunDevice, error) {
 	meshIP := MeshIPFromNodeIDWithCIDR(n.id, meshCIDR)
 	if err := configureTun(devName, meshIP, meshCIDR); err != nil {
 		for _, f := range fds {
-			f.Close()
+			_ = f.Close()
 		}
 		return nil, fmt.Errorf("tun: configure %s: %w", devName, err)
 	}
@@ -83,7 +84,8 @@ func NewTunDevice(n *Node, devName, meshCIDR string) (TunDevice, error) {
 	// Advertise our mesh IP in the gossip table.
 	if self, ok := n.table.Get(n.id); ok {
 		self.MeshIP = meshIP.String()
-		n.table.Upsert(self)
+		self.MetaVersion++
+		n.table.UpsertForce(self)
 	}
 
 	// If this node is an exit node, enable IP forwarding and masquerade
@@ -130,13 +132,13 @@ func (t *tunManager) tunReader(ctx context.Context, fd *os.File) {
 	buf := make([]byte, 65535)
 	for {
 		if ctx.Err() != nil {
-			fd.Close()
+			_ = fd.Close()
 			return
 		}
 		n, err := fd.Read(buf)
 		if err != nil {
 			if ctx.Err() != nil {
-				fd.Close()
+				_ = fd.Close()
 				return
 			}
 			continue
@@ -190,7 +192,7 @@ func (t *tunManager) routeOutbound(pkt []byte) {
 			hdr, _ := marshalStreamMsg(streamMsg{Type: "tun", NodeID: t.node.id})
 			_, _ = conn.Write(hdr)
 			_ = tunFrameWrite(conn, pkt)
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 	}
@@ -233,6 +235,10 @@ func (t *tunManager) getOrCreatePeerQueue(nodeID string, pipe net.Conn) chan tun
 // peerWriter drains the per-peer queue and writes packets to the pipe.
 // Batch-drains: after writing one packet, drains all immediately available
 // packets before yielding — coalesces syscalls under load.
+//
+// When FEC is enabled, the encoder adapts its group size based on the measured
+// per-peer loss rate from the prober. Every fecAdaptInterval packets, the
+// writer checks the current loss rate and may switch to a different group size.
 func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan tunPkt) {
 	defer func() {
 		t.peerQueuesMu.Lock()
@@ -242,12 +248,45 @@ func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan tunPkt) {
 
 	useFEC := t.node.cfg.Tun.FEC
 	var enc *fecEncoder
-	if useFEC {
-		enc = NewFECEncoder()
+	var pktCount int
+	const fecAdaptInterval = 50
+
+	adaptFEC := func() {
+		if !useFEC {
+			return
+		}
+		entry, ok := t.node.table.Get(nodeID)
+		var lossRate float64
+		if ok {
+			lossRate = entry.LossRate
+		}
+		desired := FECGroupSizeForLoss(lossRate)
+		// When --fec is explicitly enabled, never fully disable — use lightest tier.
+		// The receiver expects FEC wire format; sending plain frames would break it.
+		if desired == 0 && useFEC {
+			desired = 20
+		}
+		if enc != nil && desired == enc.GroupSize() {
+			return
+		}
+		if enc != nil && enc.Pending() {
+			_ = enc.FlushParity(pipe)
+		}
+		if desired == 0 {
+			enc = nil
+		} else {
+			enc = NewFECEncoder(desired)
+		}
 	}
 
+	adaptFEC()
+
 	writePacket := func(pkt []byte) error {
-		if !useFEC {
+		pktCount++
+		if pktCount%fecAdaptInterval == 0 {
+			adaptFEC()
+		}
+		if enc == nil {
 			return tunFrameWrite(pipe, pkt)
 		}
 		ready, err := enc.AddAndWrite(pipe, pkt)
@@ -269,7 +308,7 @@ func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan tunPkt) {
 				delete(t.pipes, nodeID)
 			}
 			t.pipesMu.Unlock()
-			pipe.Close()
+			_ = pipe.Close()
 			return
 		}
 
@@ -281,7 +320,7 @@ func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan tunPkt) {
 				err := writePacket(tp.pkt)
 				putPktBuf(tp.buf)
 				if err != nil {
-					pipe.Close()
+					_ = pipe.Close()
 					return
 				}
 			default:
@@ -294,7 +333,7 @@ func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan tunPkt) {
 // HandleInbound is called when a legacy "tun" stream arrives (non-pipe path).
 // Kept for compatibility with peers that haven't established a pipe yet.
 func (t *tunManager) HandleInbound(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	for {
 		buf, pkt, err := tunFrameReadPooled(conn)
 		if err != nil {
@@ -315,7 +354,7 @@ func (t *tunManager) HandleInbound(conn net.Conn) {
 func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 	t.pipesMu.Lock()
 	if old, ok := t.pipes[nodeID]; ok {
-		old.Close() // replace stale pipe
+		_ = old.Close() // replace stale pipe
 	}
 	t.pipes[nodeID] = conn
 	t.pipesMu.Unlock()
@@ -326,7 +365,7 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 			delete(t.pipes, nodeID)
 		}
 		t.pipesMu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	tunLog("pipe established with %s (fec=%v)", nodeID, t.node.cfg.Tun.FEC)
@@ -472,6 +511,42 @@ func (t *tunManager) syncKernelRoutes() {
 
 var _ TunDevice = (*tunManager)(nil)
 
+// UpdateMeshCIDR reconfigures the TUN interface when the scribe pushes a new
+// mesh CIDR via NetworkConfig. This updates the interface IP, netmask, gossip
+// self-entry, and rebuilds the IP→nodeID map.
+func (t *tunManager) UpdateMeshCIDR(newCIDR string) bool {
+	t.cidrMu.Lock()
+	defer t.cidrMu.Unlock()
+	if newCIDR == t.meshCIDR {
+		return false
+	}
+	oldCIDR := t.meshCIDR
+	meshIP := MeshIPFromNodeIDWithCIDR(t.node.id, newCIDR)
+	if err := configureTun(t.devName, meshIP, newCIDR); err != nil {
+		Warnf("tun: reconfigure for CIDR %s failed: %v", newCIDR, err)
+		return false
+	}
+	t.meshCIDR = newCIDR
+
+	// Update self-entry in gossip table with new mesh IP.
+	if self, ok := t.node.table.Get(t.node.id); ok {
+		self.MeshIP = meshIP.String()
+		self.MetaVersion++
+		t.node.table.UpsertForce(self)
+	}
+
+	// If exit node, reconfigure forwarding for new CIDR.
+	if t.node.cfg.Exit.Enabled {
+		configureExitForwarding(newCIDR)
+	}
+
+	Infof("tun: reconfigured %s from %s to %s (mesh IP %s)", t.devName, oldCIDR, newCIDR, meshIP)
+
+	// Rebuild IP map with IPs derived from the new CIDR.
+	t.RefreshMeshIPs()
+	return true
+}
+
 // refreshMeshIPs runs a background ticker to keep the IP map fresh.
 func (t *tunManager) refreshMeshIPs(ctx context.Context) {
 	ticker := time.NewTicker(tunRefreshInterval)
@@ -504,7 +579,7 @@ func openTunQueue(name string, multiQueue bool) (*os.File, error) {
 
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd),
 		uintptr(unix.TUNSETIFF), uintptr(unsafe.Pointer(&ifr[0]))); errno != 0 {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return nil, errno
 	}
 
@@ -523,7 +598,7 @@ func configureTun(ifName string, meshIP net.IP, cidr string) error {
 	if err != nil {
 		return fmt.Errorf("socket: %w", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	// Set IP address via SIOCSIFADDR.
 	var ifr [40]byte

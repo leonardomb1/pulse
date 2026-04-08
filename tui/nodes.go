@@ -34,7 +34,7 @@ func (a *App) renderNodes() {
 
 		meshIP := p.MeshIP
 		if meshIP == "" {
-			meshIP = node.MeshIPFromNodeID(p.NodeID).String()
+			meshIP = node.MeshIPFromNodeIDWithCIDR(p.NodeID, a.activeMeshCIDR()).String()
 		}
 
 		name := p.Name
@@ -217,13 +217,14 @@ func (a *App) showInputModal(title, label string, onDone func(string)) {
 	a.pages.AddPage("modal", center(frame, 50, 7), true, true)
 
 	input.SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEnter {
+		switch key {
+		case tcell.KeyEnter:
 			val := input.GetText()
 			a.pages.RemovePage("modal")
 			if val != "" {
 				go onDone(val)
 			}
-		} else if key == tcell.KeyEscape {
+		case tcell.KeyEscape:
 			a.pages.RemovePage("modal")
 		}
 	})

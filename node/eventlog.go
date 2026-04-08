@@ -76,7 +76,7 @@ func OpenEventLog(path string) (*EventLog, error) {
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	return &EventLog{
@@ -136,7 +136,7 @@ func (l *EventLog) Close() error {
 // Must be called with l.mu held.
 func (l *EventLog) rotateLocked() {
 	_ = l.buf.Flush()
-	l.f.Close()
+	_ = l.f.Close()
 	_ = os.Rename(l.path, l.path+".1")
 	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
@@ -183,7 +183,7 @@ func ReadFiltered(path string, opts FilterOpts) ([]EventEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var out []EventEntry
 	sc := bufio.NewScanner(f)
