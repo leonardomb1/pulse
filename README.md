@@ -77,9 +77,8 @@ Embedded devices behind carrier-grade NAT join the mesh through a cloud relay. T
 
 ```bash
 # Download and run the installer (Linux amd64/arm64):
-curl -fsSL -o install.sh https://raw.githubusercontent.com/leonardomb1/pulse/main/install.sh
-sh install.sh          # latest version
-sh install.sh v0.2.0   # specific version
+curl -fsSL https://raw.githubusercontent.com/leonardomb1/pulse/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/leonardomb1/pulse/main/install.sh | sh -s -- v0.2.0
 
 # Or build from source:
 go build -o pulse ./cmd/pulse/
