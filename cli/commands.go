@@ -941,6 +941,37 @@ func RunRestart(args []string) {
 	fmt.Printf("restart signal sent to %s\n", args[0])
 }
 
+func RunRemoteConfig(args []string) {
+	fs := flag.NewFlagSet("remote-config", flag.ExitOnError)
+	sock := fs.String("socket", "", "control socket path")
+	nodeID := fs.String("node", "", "target node ID")
+	_ = fs.Parse(args)
+
+	if *nodeID == "" || fs.NArg() == 0 {
+		_, _ = fmt.Fprintln(os.Stderr, "Usage: pulse remote-config --node <id> key=value [key=value ...]")
+		os.Exit(1)
+	}
+
+	cfg := make(map[string]string)
+	for _, arg := range fs.Args() {
+		parts := strings.SplitN(arg, "=", 2)
+		if len(parts) != 2 {
+			log.Fatalf("invalid key=value pair: %s", arg)
+		}
+		cfg[parts[0]] = parts[1]
+	}
+
+	path := SocketPath([]string{"--socket", *sock})
+	if _, err := CtrlDo(path, map[string]interface{}{
+		"cmd":           "remote-config",
+		"node_id":       *nodeID,
+		"remote_config": cfg,
+	}); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("config pushed to %s: %v\n", *nodeID, cfg)
+}
+
 func RunGroups(args []string) {
 	sock := SocketPath(args)
 	resp, err := CtrlDo(sock, map[string]string{"cmd": "status"})
@@ -1002,46 +1033,6 @@ func RunBulk(args []string) {
 	fmt.Printf("  POST /api/bulk {\"pattern\":\"%s\", \"action\":\"%s\"}\n", args[0], args[1])
 }
 
-func RunSetup(args []string) {
-	if len(args) == 0 {
-		fmt.Println("Usage: pulse setup <dns>")
-		os.Exit(1)
-	}
-	switch args[0] {
-	case "dns":
-		RunSetupDNS(args[1:])
-	default:
-		fmt.Printf("unknown setup subcommand: %s\n", args[0])
-		os.Exit(1)
-	}
-}
-
-func RunSetupDNS(args []string) {
-	fs := flag.NewFlagSet("setup dns", flag.ExitOnError)
-	_ = fs.Parse(args)
-	cfg := config.Defaults()
-	if !cfg.DNS.Enabled || cfg.DNS.Listen == "" {
-		log.Fatal("DNS is not enabled in config — set [dns] enabled=true and listen=<addr>")
-	}
-	const dropinDir = "/etc/systemd/resolved.conf.d"
-	const dropinPath = dropinDir + "/pulse.conf"
-	dropin := fmt.Sprintf("[Resolve]\nDNS=%s\nDomains=~pulse\n", cfg.DNS.Listen)
-	if err := os.MkdirAll(dropinDir, 0755); err != nil {
-		log.Fatalf("create %s: %v (try running with sudo)", dropinDir, err)
-	}
-	if err := os.WriteFile(dropinPath, []byte(dropin), 0644); err != nil {
-		log.Fatalf("write %s: %v (try running with sudo)", dropinPath, err)
-	}
-	fmt.Printf("wrote %s\n  DNS=%s\n  Domains=~pulse\n", dropinPath, cfg.DNS.Listen)
-	fmt.Println("restarting systemd-resolved...")
-	proc, _ := os.StartProcess("/usr/bin/systemctl", []string{"systemctl", "restart", "systemd-resolved"},
-		&os.ProcAttr{Files: []*os.File{os.Stdin, os.Stdout, os.Stderr}})
-	if proc != nil {
-		_, _ = proc.Wait()
-	}
-	fmt.Println("ok")
-}
-
 func RunTop(args []string) {
 	sock := SocketPath(args)
 	if err := tui.New(sock).Run(); err != nil {
@@ -1054,8 +1045,8 @@ var pulseCommands = []string{
 	"join", "invite", "tag", "untag", "name", "revoke",
 	"acl", "token", "connect", "forward", "dns", "route",
 	"events", "logs", "stats", "mesh-ip",
-	"restart", "pin", "unpin", "groups", "template", "bulk",
-	"ca", "setup", "completion", "version", "help",
+	"restart", "remote-config", "pin", "unpin", "groups", "template", "bulk",
+	"ca", "completion", "version", "help",
 }
 
 func RunCompletion(args []string) {
@@ -1139,6 +1130,7 @@ Observability:
 
 Fleet:
   pulse restart <node-id>                 restart a remote node
+  pulse remote-config --node <id> k=v     push config to a remote node
   pulse pin <node-id> <via-relay-id>      force traffic through a specific relay
   pulse unpin <node-id>                   remove route pin
   pulse groups                            show tag-based node groups
@@ -1147,7 +1139,6 @@ Fleet:
 
 Admin:
   pulse ca sign --ca-dir <dir> ...        sign a node cert offline
-  pulse setup dns                         configure systemd-resolved for .pulse
   pulse completion <bash|zsh|fish>        generate shell completions
 
 Node flags:
@@ -1174,6 +1165,8 @@ Feature flags:
   --fec                  forward error correction on TUN pipes (lossy links)
   --exit                 enable exit node
   --exit-cidrs <cidrs>   comma-separated CIDRs this exit node advertises
+  --mesh-cidr <cidr>     mesh IP range (default 10.100.0.0/16)
+  --iouring              use io_uring for TUN I/O (Linux ≥5.1, auto-fallback)
 
 Examples:
   # Home node (CA + scribe + all services):

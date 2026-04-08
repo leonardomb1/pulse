@@ -16,121 +16,134 @@ import (
 	"github.com/leonardomb1/pulse/node"
 )
 
+// FlagValues holds all the CLI flag values for running a node.
+type FlagValues struct {
+	Addr          string
+	Listen        string
+	TCP           string
+	DataDir       string
+	NetworkID     string
+	JoinAddr      string
+	JoinToken     string
+	CAEnabled     bool
+	CAToken       string
+	SOCKSEnabled  bool
+	SOCKSListen   string
+	DNSEnabled    bool
+	DNSListen     string
+	TunEnabled    bool
+	TunQueues     int
+	FECEnabled    bool
+	ScribeEnabled bool
+	ScribeListen  string
+	ExitEnabled   bool
+	ExitCIDRs     string
+	MeshCIDR      string
+	IOURing       bool
+}
+
 // NodeFlags registers all flags for running a node on the given FlagSet.
-func NodeFlags(fs *flag.FlagSet) (
-	wsAddr, listenAddr, tcpAddr, dataDir, networkID, joinAddr, joinToken *string,
-	caEnabled *bool, caToken *string,
-	socksEnabled *bool, socksListen *string,
-	dnsEnabled *bool, dnsListen *string,
-	tunEnabled *bool, tunQueues *int, fecEnabled *bool,
-	scribeEnabled *bool, scribeListen *string,
-	exitEnabled *bool, exitCIDRs *string,
-	meshCIDR *string,
-) {
-	dataDir = fs.String("data-dir", "", "persistent data directory (default ~/.pulse)")
-	wsAddr = fs.String("addr", "", "advertised address (gossipped to peers)")
-	listenAddr = fs.String("listen", "", "bind address (default: same as --addr)")
-	tcpAddr = fs.String("tcp", "", "TCP tunnel listener address")
-	networkID = fs.String("network", "", "network ID for isolation (peers with different IDs are rejected)")
-	joinAddr = fs.String("join", "", "CA relay address (bootstrap on startup if not yet joined)")
-	joinToken = fs.String("token", "", "join token")
-	caEnabled = fs.Bool("ca", false, "enable certificate authority")
-	caToken = fs.String("ca-token", "", "join token the CA accepts (defaults to --token)")
-	socksEnabled = fs.Bool("socks", false, "enable SOCKS5 proxy")
-	socksListen = fs.String("socks-listen", "", "SOCKS5 listen address (default 127.0.0.1:1080)")
-	dnsEnabled = fs.Bool("dns", false, "enable DNS server for .pulse")
-	dnsListen = fs.String("dns-listen", "", "DNS listen address (default 127.0.0.1:5353)")
-	tunEnabled = fs.Bool("tun", false, "enable TUN interface (Linux only)")
-	tunQueues = fs.Int("tun-queues", 0, "TUN multi-queue readers (default 1, set to CPU count for high throughput)")
-	fecEnabled = fs.Bool("fec", false, "enable FEC on TUN pipes (lossy links)")
-	scribeEnabled = fs.Bool("scribe", false, "enable scribe (control plane)")
-	scribeListen = fs.String("scribe-listen", "", "scribe HTTP API address (default 127.0.0.1:8080)")
-	exitEnabled = fs.Bool("exit", false, "enable exit node")
-	exitCIDRs = fs.String("exit-cidrs", "", "comma-separated CIDRs this exit node advertises (e.g. 0.0.0.0/0)")
-	meshCIDR = fs.String("mesh-cidr", "", "mesh IP range (default 10.100.0.0/16)")
-	return
+func NodeFlags(fs *flag.FlagSet) *FlagValues {
+	f := &FlagValues{}
+	fs.StringVar(&f.DataDir, "data-dir", "", "persistent data directory (default ~/.pulse)")
+	fs.StringVar(&f.Addr, "addr", "", "advertised address (gossipped to peers)")
+	fs.StringVar(&f.Listen, "listen", "", "bind address (default: same as --addr)")
+	fs.StringVar(&f.TCP, "tcp", "", "TCP tunnel listener address")
+	fs.StringVar(&f.NetworkID, "network", "", "network ID for isolation (peers with different IDs are rejected)")
+	fs.StringVar(&f.JoinAddr, "join", "", "CA relay address (bootstrap on startup if not yet joined)")
+	fs.StringVar(&f.JoinToken, "token", "", "join token")
+	fs.BoolVar(&f.CAEnabled, "ca", false, "enable certificate authority")
+	fs.StringVar(&f.CAToken, "ca-token", "", "join token the CA accepts (defaults to --token)")
+	fs.BoolVar(&f.SOCKSEnabled, "socks", false, "enable SOCKS5 proxy")
+	fs.StringVar(&f.SOCKSListen, "socks-listen", "", "SOCKS5 listen address (default 127.0.0.1:1080)")
+	fs.BoolVar(&f.DNSEnabled, "dns", false, "enable DNS server for .pulse")
+	fs.StringVar(&f.DNSListen, "dns-listen", "", "DNS listen address (default 127.0.0.1:5353)")
+	fs.BoolVar(&f.TunEnabled, "tun", false, "enable TUN interface (Linux only)")
+	fs.IntVar(&f.TunQueues, "tun-queues", 0, "TUN multi-queue readers (default 1, set to CPU count for high throughput)")
+	fs.BoolVar(&f.FECEnabled, "fec", false, "enable FEC on TUN pipes (lossy links)")
+	fs.BoolVar(&f.ScribeEnabled, "scribe", false, "enable scribe (control plane)")
+	fs.StringVar(&f.ScribeListen, "scribe-listen", "", "scribe HTTP API address (default 127.0.0.1:8080)")
+	fs.BoolVar(&f.ExitEnabled, "exit", false, "enable exit node")
+	fs.StringVar(&f.ExitCIDRs, "exit-cidrs", "", "comma-separated CIDRs this exit node advertises (e.g. 0.0.0.0/0)")
+	fs.StringVar(&f.MeshCIDR, "mesh-cidr", "", "mesh IP range (default 10.100.0.0/16)")
+	fs.BoolVar(&f.IOURing, "iouring", false, "use io_uring for TUN I/O (Linux ≥5.1, auto-fallback)")
+	return f
 }
 
 // ApplyFlags merges CLI flags into the loaded config. Flags take precedence.
-func ApplyFlags(cfg *config.Config,
-	wsAddr, listenAddr, tcpAddr, dataDir, networkID, joinAddr, joinToken string,
-	caEnabled bool, caToken string,
-	socksEnabled bool, socksListen string,
-	dnsEnabled bool, dnsListen string,
-	tunEnabled bool, tunQueues int, fecEnabled bool,
-	scribeEnabled bool, scribeListen string,
-	exitEnabled bool, exitCIDRs string,
-	meshCIDR string,
-) {
-	if dataDir != "" {
-		cfg.Node.DataDir = dataDir
-		cfg.CA.DataDir = dataDir + "/ca"
-		cfg.Exit.RoutesFile = dataDir + "/routes.json"
-		cfg.Control.Socket = dataDir + "/pulse.sock"
+func ApplyFlags(cfg *config.Config, f *FlagValues) {
+	if f.DataDir != "" {
+		cfg.Node.DataDir = f.DataDir
+		cfg.CA.DataDir = f.DataDir + "/ca"
+		cfg.Exit.RoutesFile = f.DataDir + "/routes.json"
+		cfg.Control.Socket = f.DataDir + "/pulse.sock"
 	}
-	if wsAddr != "" {
-		cfg.Node.Addr = wsAddr
+	if f.Addr != "" {
+		cfg.Node.Addr = f.Addr
 	}
-	if listenAddr != "" {
-		cfg.Node.Listen = listenAddr
+	if f.Listen != "" {
+		cfg.Node.Listen = f.Listen
 	}
-	if tcpAddr != "" {
-		cfg.Node.TCPListen = tcpAddr
+	if f.TCP != "" {
+		cfg.Node.TCPListen = f.TCP
 	}
-	if networkID != "" {
-		cfg.Node.NetworkID = networkID
+	if f.NetworkID != "" {
+		cfg.Node.NetworkID = f.NetworkID
 	}
-	if joinAddr != "" {
-		cfg.Join.RelayAddr = joinAddr
+	if f.JoinAddr != "" {
+		cfg.Join.RelayAddr = f.JoinAddr
 	}
-	if joinToken != "" {
-		cfg.Join.Token = joinToken
+	if f.JoinToken != "" {
+		cfg.Join.Token = f.JoinToken
 	}
-	if caEnabled {
+	if f.CAEnabled {
 		cfg.CA.Enabled = true
-		tok := caToken
+		tok := f.CAToken
 		if tok == "" {
-			tok = joinToken
+			tok = f.JoinToken
 		}
 		if tok != "" {
 			cfg.CA.JoinToken = tok
 		}
 	}
-	if socksEnabled {
+	if f.SOCKSEnabled {
 		cfg.SOCKS.Enabled = true
 	}
-	if socksListen != "" {
-		cfg.SOCKS.Listen = socksListen
+	if f.SOCKSListen != "" {
+		cfg.SOCKS.Listen = f.SOCKSListen
 	}
-	if dnsEnabled {
+	if f.DNSEnabled {
 		cfg.DNS.Enabled = true
 	}
-	if dnsListen != "" {
-		cfg.DNS.Listen = dnsListen
+	if f.DNSListen != "" {
+		cfg.DNS.Listen = f.DNSListen
 	}
-	if tunEnabled {
+	if f.TunEnabled {
 		cfg.Tun.Enabled = true
 	}
-	if tunQueues > 0 {
-		cfg.Tun.Queues = tunQueues
+	if f.TunQueues > 0 {
+		cfg.Tun.Queues = f.TunQueues
 	}
-	if fecEnabled {
+	if f.FECEnabled {
 		cfg.Tun.FEC = true
 	}
-	if scribeEnabled {
+	if f.ScribeEnabled {
 		cfg.Scribe.Enabled = true
 	}
-	if scribeListen != "" {
-		cfg.Scribe.Listen = scribeListen
+	if f.ScribeListen != "" {
+		cfg.Scribe.Listen = f.ScribeListen
 	}
-	if exitEnabled {
+	if f.ExitEnabled {
 		cfg.Exit.Enabled = true
 	}
-	if exitCIDRs != "" {
-		cfg.Exit.CIDRs = strings.Split(exitCIDRs, ",")
+	if f.ExitCIDRs != "" {
+		cfg.Exit.CIDRs = strings.Split(f.ExitCIDRs, ",")
 	}
-	if meshCIDR != "" {
-		cfg.Tun.CIDR = meshCIDR
+	if f.MeshCIDR != "" {
+		cfg.Tun.CIDR = f.MeshCIDR
+	}
+	if f.IOURing {
+		cfg.Tun.IOURing = true
 	}
 }
 
@@ -168,6 +181,9 @@ func ApplyNodeState(cfg *config.Config, dataDir string, explicitFlags map[string
 	if !explicitFlags["mesh-cidr"] && nc.MeshCIDR != "" {
 		cfg.Tun.CIDR = nc.MeshCIDR
 	}
+	if !explicitFlags["iouring"] && nc.IOURing {
+		cfg.Tun.IOURing = true
+	}
 	if !explicitFlags["log-level"] && nc.LogLevel != "" {
 		cfg.Node.LogLevel = nc.LogLevel
 	}
@@ -180,25 +196,16 @@ var NodeVersion = "dev"
 
 func RunNode(args []string) {
 	fs := flag.NewFlagSet("pulse", flag.ExitOnError)
-	wsAddr, listenAddr, tcpAddr, dataDir, networkID, joinAddr, joinToken,
-		caEnabled, caToken,
-		socksEnabled, socksListen,
-		dnsEnabled, dnsListen,
-		tunEnabled, tunQueues, fecEnabled,
-		scribeEnabled, scribeListen,
-		exitEnabled, exitCIDRs,
-		meshCIDR := NodeFlags(fs)
+	f := NodeFlags(fs)
 	logLevelFlag := fs.String("log-level", "", "log level: debug, info, warn, error (default: info)")
 	_ = fs.Parse(args)
 
 	cfg := config.Defaults()
-	ApplyFlags(cfg, *wsAddr, *listenAddr, *tcpAddr, *dataDir, *networkID, *joinAddr, *joinToken,
-		*caEnabled, *caToken, *socksEnabled, *socksListen,
-		*dnsEnabled, *dnsListen, *tunEnabled, *tunQueues, *fecEnabled, *scribeEnabled, *scribeListen, *exitEnabled, *exitCIDRs, *meshCIDR)
+	ApplyFlags(cfg, f)
 
 	// Load signed state from scribe (if exists). CLI flags take precedence.
 	explicit := make(map[string]bool)
-	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	fs.Visit(func(fl *flag.Flag) { explicit[fl.Name] = true })
 	ApplyNodeState(cfg, cfg.Node.DataDir, explicit)
 
 	ll := *logLevelFlag

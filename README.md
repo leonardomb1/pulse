@@ -168,12 +168,31 @@ pulse dns list|add|remove             Manage DNS records
 pulse route list|add|remove           Manage exit routes
 ```
 
+### Observability
+
+```
+pulse logs [-f] [-n 50]                 Show daemon logs (tail/follow)
+pulse events [--type X] [--node X]      Query structured event log
+pulse stats [node-id]                   Show per-peer stats time series
+```
+
+### Fleet
+
+```
+pulse restart <node-id>                 Restart a remote node
+pulse remote-config --node <id> k=v     Push config to a remote node
+pulse pin <node-id> <via-relay-id>      Force traffic through a specific relay
+pulse unpin <node-id>                   Remove route pin
+pulse groups                            Show tag-based node groups
+pulse template list                     Show config templates (scribe API)
+pulse bulk <pattern> <action>           Bulk operation by tag pattern (scribe API)
+```
+
 ### Admin
 
 ```
 pulse ca log                          View CA audit log
 pulse ca sign --ca-dir <dir> ...      Offline cert signing
-pulse setup dns                       Configure systemd-resolved for .pulse (see below)
 pulse completion <bash|zsh|fish>      Generate shell completions
 ```
 
@@ -188,28 +207,6 @@ eval "$(pulse completion zsh)"
 
 # Fish:
 pulse completion fish | source
-```
-
-#### Setting up .pulse DNS resolution
-
-`pulse setup dns` configures `systemd-resolved` so that `.pulse` domains (e.g. `ssh user@db.pulse`) resolve through pulse's built-in DNS server. It requires `sudo` because it writes a system-level config file.
-
-What it does:
-
-1. Writes `/etc/systemd/resolved.conf.d/pulse.conf` with the pulse DNS address and `Domains=~pulse`
-2. Restarts `systemd-resolved` to apply the change
-
-```bash
-sudo pulse setup dns
-```
-
-After running this, any `.pulse` lookup on the machine is routed to pulse's DNS server. All other DNS queries continue to use the system default.
-
-To undo, remove the file and restart resolved:
-
-```bash
-sudo rm /etc/systemd/resolved.conf.d/pulse.conf
-sudo systemctl restart systemd-resolved
 ```
 
 ## Node Flags
@@ -241,6 +238,8 @@ sudo systemctl restart systemd-resolved
 --fec                  Forward error correction on TUN pipes (lossy links)
 --exit                 Exit node (forwards traffic to internet)
 --exit-cidrs <cidrs>   Comma-separated CIDRs this exit node advertises (e.g. 0.0.0.0/0)
+--mesh-cidr <cidr>     Mesh IP range (default 10.100.0.0/16)
+--iouring              Use io_uring for TUN I/O (Linux ≥5.1, auto-fallback if unsupported)
 ```
 
 ## How it works
@@ -392,17 +391,27 @@ The scribe exposes a REST API (default `127.0.0.1:8080`):
 
 | Endpoint | Methods | Purpose |
 |----------|---------|---------|
-| `GET /api/status` | GET | Full mesh state with per-node traffic stats |
-| `GET /api/nodes` | GET | Peer list |
-| `GET/PUT /api/config` | GET, PUT | Raw NetworkConfig |
-| `GET/POST/DELETE /api/dns` | * | DNS zone CRUD |
-| `GET/POST/DELETE /api/acls` | * | ACL rule CRUD |
-| `POST/DELETE /api/tags` | * | Node tag management |
-| `PUT /api/name` | PUT | Set node name |
-| `GET /api/routes` | GET | Exit route table |
-| `POST /api/revoke` | POST | Revoke a node |
-| `GET/POST/DELETE /api/tokens` | * | Token management |
-| `GET /metrics` | GET | Prometheus metrics |
+| `/api/status` | GET | Full mesh state with per-node traffic stats |
+| `/api/nodes` | GET | Peer list |
+| `/api/node/<id>` | GET | Single node detail (link, stats, tags, roles) |
+| `/api/config` | GET, PUT | Raw NetworkConfig |
+| `/api/dns` | GET, POST, DELETE | DNS zone CRUD |
+| `/api/acls` | GET, POST, DELETE | ACL rule CRUD |
+| `/api/tags` | POST, DELETE | Node tag management |
+| `/api/name` | PUT | Set node name |
+| `/api/mesh-ip` | PUT | Set mesh IP override |
+| `/api/routes` | GET, POST, DELETE | Exit route CRUD |
+| `/api/revoke` | POST | Revoke a node |
+| `/api/tokens` | GET, POST, DELETE | Token management |
+| `/api/events` | GET | Query structured event log |
+| `/api/versions` | GET | Fleet version distribution |
+| `/api/groups` | GET | Tag-based node groups |
+| `/api/pin` | PUT, DELETE | Route pinning |
+| `/api/templates` | GET, POST, DELETE | Config template management |
+| `/api/bulk` | POST | Bulk operations by tag pattern |
+| `/api/remote/restart` | POST | Restart a remote node |
+| `/api/remote/config` | POST | Push config to a remote node |
+| `/metrics` | GET | Prometheus metrics |
 
 ## Prometheus Metrics
 

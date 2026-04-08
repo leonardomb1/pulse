@@ -79,7 +79,8 @@ type TunConfig struct {
 	Name    string
 	CIDR    string
 	FEC     bool
-	Queues  int // multi-queue TUN readers (default 1, set higher for >1Gbps)
+	Queues  int  // multi-queue TUN readers (default 1, set higher for >1Gbps)
+	IOURing bool // use io_uring for TUN I/O (Linux ≥5.1, auto-fallback)
 }
 
 type PersistConfig struct {

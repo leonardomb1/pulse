@@ -9,15 +9,9 @@ import (
 func TestApplyFlagsDataDir(t *testing.T) {
 	cfg := config.Defaults()
 
-	cli.ApplyFlags(cfg,
-		"", "", "", "/tmp/test-pulse", "", "", "",
-		false, "",
-		false, "",
-		false, "",
-		false, 0, false,
-		false, "",
-		false, "", "",
-	)
+	cli.ApplyFlags(cfg, &cli.FlagValues{
+		DataDir: "/tmp/test-pulse",
+	})
 
 	if cfg.Node.DataDir != "/tmp/test-pulse" {
 		t.Errorf("DataDir = %q, want /tmp/test-pulse", cfg.Node.DataDir)
@@ -36,15 +30,26 @@ func TestApplyFlagsDataDir(t *testing.T) {
 func TestApplyFlagsFeatures(t *testing.T) {
 	cfg := config.Defaults()
 
-	cli.ApplyFlags(cfg,
-		"relay:443", ":443", ":9000", "", "prod", "", "mytoken",
-		true, "ca-secret",
-		true, "127.0.0.1:1081",
-		true, "127.0.0.1:5454",
-		true, 4, false,
-		true, "0.0.0.0:9090",
-		true, "10.0.0.0/8,192.168.0.0/16", "172.16.0.0/12",
-	)
+	cli.ApplyFlags(cfg, &cli.FlagValues{
+		Addr:          "relay:443",
+		Listen:        ":443",
+		TCP:           ":9000",
+		NetworkID:     "prod",
+		JoinToken:     "mytoken",
+		CAEnabled:     true,
+		CAToken:       "ca-secret",
+		SOCKSEnabled:  true,
+		SOCKSListen:   "127.0.0.1:1081",
+		DNSEnabled:    true,
+		DNSListen:     "127.0.0.1:5454",
+		TunEnabled:    true,
+		TunQueues:     4,
+		ScribeEnabled: true,
+		ScribeListen:  "0.0.0.0:9090",
+		ExitEnabled:   true,
+		ExitCIDRs:     "10.0.0.0/8,192.168.0.0/16",
+		MeshCIDR:      "172.16.0.0/12",
+	})
 
 	if cfg.Node.Addr != "relay:443" {
 		t.Errorf("Addr = %q", cfg.Node.Addr)
@@ -91,15 +96,10 @@ func TestApplyFlagsCATokenFallback(t *testing.T) {
 	cfg := config.Defaults()
 
 	// When --ca is set but --ca-token is empty, should fall back to --token.
-	cli.ApplyFlags(cfg,
-		"", "", "", "", "", "", "shared-token",
-		true, "",
-		false, "",
-		false, "",
-		false, 0, false,
-		false, "",
-		false, "", "",
-	)
+	cli.ApplyFlags(cfg, &cli.FlagValues{
+		JoinToken: "shared-token",
+		CAEnabled: true,
+	})
 
 	if cfg.CA.JoinToken != "shared-token" {
 		t.Errorf("CA.JoinToken should fall back to --token, got %q", cfg.CA.JoinToken)
@@ -111,15 +111,7 @@ func TestApplyFlagsNoOverrideDefaults(t *testing.T) {
 	origAddr := cfg.Node.Addr
 
 	// Empty flags should not override defaults.
-	cli.ApplyFlags(cfg,
-		"", "", "", "", "", "", "",
-		false, "",
-		false, "",
-		false, "",
-		false, 0, false,
-		false, "",
-		false, "", "",
-	)
+	cli.ApplyFlags(cfg, &cli.FlagValues{})
 
 	if cfg.Node.Addr != origAddr {
 		t.Errorf("Addr should not change with empty flag, got %q want %q", cfg.Node.Addr, origAddr)
