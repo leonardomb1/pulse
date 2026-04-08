@@ -134,12 +134,15 @@ const (
 // ioUringBufferSize is the size of each registered buffer (MTU + headroom).
 const ioUringBufferSize = 2048
 
-// ioUringBufferCount is the number of pre-registered buffers per ring.
-const ioUringBufferCount = 256
+// ioUringDefaultBufCount is the default number of buffers per ring.
+// Kept moderate to stay within RLIMIT_MEMLOCK on multi-queue setups.
+// Override with --iouring-bufs.
+const ioUringDefaultBufCount = 128
 
 // newIOUring creates an io_uring instance for the given TUN file descriptor.
 // entries must be a power of 2 (typically 256 or 512).
-func newIOUring(tunFD int, entries uint32) (*ioUring, error) {
+// bufCount overrides the buffer pool size (0 = default).
+func newIOUring(tunFD int, entries uint32, bufCount int) (*ioUring, error) {
 	params := ioUringParams{}
 	ringFD, _, errno := unix.Syscall(
 		unix.SYS_IO_URING_SETUP,
@@ -151,6 +154,10 @@ func newIOUring(tunFD int, entries uint32) (*ioUring, error) {
 		return nil, fmt.Errorf("io_uring_setup: %w", errno)
 	}
 
+	if bufCount <= 0 {
+		bufCount = ioUringDefaultBufCount
+	}
+
 	ring := &ioUring{
 		fd:        int(ringFD),
 		tunFD:     tunFD,
@@ -158,7 +165,7 @@ func newIOUring(tunFD int, entries uint32) (*ioUring, error) {
 		sqEntries: params.SqOff.RingEntries,
 		cqEntries: params.CqOff.RingEntries,
 		bufSize:   ioUringBufferSize,
-		bufCount:  ioUringBufferCount,
+		bufCount:  bufCount,
 	}
 
 	if err := ring.mapRings(&params); err != nil {
@@ -166,10 +173,7 @@ func newIOUring(tunFD int, entries uint32) (*ioUring, error) {
 		return nil, err
 	}
 
-	if err := ring.setupBuffers(); err != nil {
-		_ = ring.Close()
-		return nil, err
-	}
+	ring.setupBuffers() // best-effort; works without registered buffers too
 
 	return ring, nil
 }
@@ -226,8 +230,11 @@ func (r *ioUring) mapRings(params *ioUringParams) error {
 	return nil
 }
 
-// setupBuffers allocates and registers a contiguous buffer pool with the kernel.
-func (r *ioUring) setupBuffers() error {
+// setupBuffers allocates a contiguous buffer pool and attempts to register it
+// with the kernel for zero-copy I/O. Registration is best-effort — if it fails
+// (e.g. RLIMIT_MEMLOCK exceeded on multi-queue setups), the ring still works
+// using the same buffers from userspace without the zero-copy optimization.
+func (r *ioUring) setupBuffers() {
 	r.bufPool = make([]byte, r.bufSize*r.bufCount)
 	r.bufInUse = make([]int32, r.bufCount)
 	r.iovecs = make([]unix.Iovec, r.bufCount)
@@ -249,10 +256,8 @@ func (r *ioUring) setupBuffers() error {
 		0, 0,
 	)
 	if errno != 0 {
-		return fmt.Errorf("io_uring_register buffers: %w", errno)
+		Debugf("io_uring: buffer registration failed (%v) — using unregistered buffers", errno)
 	}
-
-	return nil
 }
 
 // acquireBuffer claims a buffer from the pool. Returns the index or -1 if full.
@@ -455,7 +460,7 @@ type ExportIOURing struct {
 
 // NewIOURingForTest creates a ring for testing.
 func NewIOURingForTest(fd int, entries uint32) (*ExportIOURing, error) {
-	ring, err := newIOUring(fd, entries)
+	ring, err := newIOUring(fd, entries, 0)
 	if err != nil {
 		return nil, err
 	}

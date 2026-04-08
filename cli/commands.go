@@ -1167,6 +1167,7 @@ Feature flags:
   --exit-cidrs <cidrs>   comma-separated CIDRs this exit node advertises
   --mesh-cidr <cidr>     mesh IP range (default 10.100.0.0/16)
   --iouring              use io_uring for TUN I/O (Linux ≥5.1, auto-fallback)
+  --iouring-bufs <N>     io_uring buffers per queue (default 128)
 
 Examples:
   # Home node (CA + scribe + all services):

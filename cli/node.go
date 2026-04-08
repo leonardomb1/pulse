@@ -40,6 +40,7 @@ type FlagValues struct {
 	ExitCIDRs     string
 	MeshCIDR      string
 	IOURing       bool
+	IOURingBufs   int
 }
 
 // NodeFlags registers all flags for running a node on the given FlagSet.
@@ -67,6 +68,7 @@ func NodeFlags(fs *flag.FlagSet) *FlagValues {
 	fs.StringVar(&f.ExitCIDRs, "exit-cidrs", "", "comma-separated CIDRs this exit node advertises (e.g. 0.0.0.0/0)")
 	fs.StringVar(&f.MeshCIDR, "mesh-cidr", "", "mesh IP range (default 10.100.0.0/16)")
 	fs.BoolVar(&f.IOURing, "iouring", false, "use io_uring for TUN I/O (Linux ≥5.1, auto-fallback)")
+	fs.IntVar(&f.IOURingBufs, "iouring-bufs", 0, "io_uring buffers per queue (default 128)")
 	return f
 }
 
@@ -144,6 +146,9 @@ func ApplyFlags(cfg *config.Config, f *FlagValues) {
 	}
 	if f.IOURing {
 		cfg.Tun.IOURing = true
+	}
+	if f.IOURingBufs > 0 {
+		cfg.Tun.IOURingBufs = f.IOURingBufs
 	}
 }
 

@@ -254,6 +254,7 @@ pulse completion fish | source
 --exit-cidrs <cidrs>   Comma-separated CIDRs this exit node advertises (e.g. 0.0.0.0/0)
 --mesh-cidr <cidr>     Mesh IP range (default 10.100.0.0/16)
 --iouring              Use io_uring for TUN I/O (Linux ≥5.1, auto-fallback if unsupported)
+--iouring-bufs <N>     io_uring buffers per queue (default 128, higher = more in-flight I/O)
 ```
 
 ## How it works

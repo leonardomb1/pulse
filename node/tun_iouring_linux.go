@@ -24,7 +24,7 @@ const ioUringBatchSize = 64
 // packet and resubmits a new read for that buffer slot.
 func (t *tunManager) tunReaderIOURing(ctx context.Context, fd *os.File) {
 	tunFD := int(fd.Fd())
-	ring, err := newIOUring(tunFD, 256)
+	ring, err := newIOUring(tunFD, 256, t.node.cfg.Tun.IOURingBufs)
 	if err != nil {
 		Warnf("tun: io_uring setup failed (%v) — falling back to standard reader", err)
 		t.tunReader(ctx, fd)
@@ -149,7 +149,7 @@ func tunWriteIOURing(ring *ioUring, pkt []byte) error {
 // the context is cancelled.
 func (t *tunManager) tunPipeWriterIOURing(ctx context.Context, fd *os.File) func(pkt []byte) error {
 	tunFD := int(fd.Fd())
-	ring, err := newIOUring(tunFD, 64)
+	ring, err := newIOUring(tunFD, 64, t.node.cfg.Tun.IOURingBufs)
 	if err != nil {
 		Debugf("tun: io_uring write ring setup failed: %v — using standard writes", err)
 		return nil
