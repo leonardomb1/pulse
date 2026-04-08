@@ -18,9 +18,10 @@ type DNSZone struct {
 // NodeMeta holds operator-assigned metadata for a node (name, tags).
 // Managed by the scribe and distributed via NetworkConfig.
 type NodeMeta struct {
-	Name   string   `json:"name,omitempty"`
-	Tags   []string `json:"tags,omitempty"`
-	MeshIP string   `json:"mesh_ip,omitempty"` // operator-assigned mesh IP override
+	Name      string   `json:"name,omitempty"`
+	Tags      []string `json:"tags,omitempty"`
+	MeshIP    string   `json:"mesh_ip,omitempty"`    // operator-assigned mesh IP override
+	PinnedVia string   `json:"pinned_via,omitempty"` // force traffic through this relay nodeID
 }
 
 // NetworkConfig is the authoritative network-wide configuration distributed by
@@ -77,6 +78,7 @@ type NodeConfig struct {
 	ExitEnabled  bool     `json:"exit_enabled"`
 	ExitCIDRs    []string `json:"exit_cidrs,omitempty"`
 	FECEnabled   bool     `json:"fec_enabled"`
+	TunQueues    int      `json:"tun_queues,omitempty"` // multi-queue TUN readers
 	MeshIP       string   `json:"mesh_ip,omitempty"`
 	MeshCIDR     string   `json:"mesh_cidr,omitempty"`
 	LogLevel     string   `json:"log_level,omitempty"`

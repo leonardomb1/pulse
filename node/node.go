@@ -226,6 +226,7 @@ func New(cfg *config.Config, ca *CA, version string) (*Node, error) {
 		n.emitEvent(EventEntry{Type: EventLinkDown, NodeID: nodeID, Detail: "dead link detected by prober"})
 	}
 
+	router.netCfg = &n.netCfg
 	n.nat = NewNATManager(identity.NodeID, table, registry, router, n.clientTLSConfig(), n.onPeerSession)
 	n.nat.onEvent = n.emitEvent
 

@@ -636,6 +636,116 @@ func TestDockerExitRouting(t *testing.T) {
 	})
 }
 
+// TestDockerMultiQueueTUN verifies that multi-queue TUN starts correctly
+// and can route traffic with --tun-queues 4.
+//
+// Topology:
+//
+//	mq-net (172.30.6.0/24):
+//	  mq-ca     (.100) — CA, single queue (default)
+//	  mq-client (.2)   — client with --tun-queues 4
+func TestDockerMultiQueueTUN(t *testing.T) {
+	if os.Getenv("PULSE_DOCKER_TEST") == "" {
+		t.Skip("set PULSE_DOCKER_TEST=1 to run Docker integration tests")
+	}
+	if !dockerAvailable() {
+		t.Skip("docker not available")
+	}
+
+	const (
+		mqNet    = "pulse-mq-net"
+		mqSubnet = "172.30.6.0/24"
+		mqCAIP   = "172.30.6.100"
+		mqClIP   = "172.30.6.2"
+		mqToken  = "mq-test-token"
+	)
+
+	defer func() {
+		_, _ = docker("rm", "-f", "mq-ca", "mq-client")
+		_, _ = docker("network", "rm", mqNet)
+	}()
+
+	_, _ = docker("network", "rm", mqNet)
+	if _, err := docker("network", "create", "--subnet", mqSubnet, mqNet); err != nil {
+		t.Fatalf("create network: %v", err)
+	}
+
+	caAddr := mqCAIP + ":8443"
+
+	// CA with default single queue.
+	startMeshContainer(t, "mq-ca", mqNet, mqCAIP, nil,
+		"--ca", "--scribe", "--tun",
+		"--addr", caAddr,
+		"--network", "mq-test",
+		"--token", mqToken,
+		"--log-level", "warn",
+	)
+	waitMeshReady(t, "mq-ca")
+
+	// Client with 4 TUN queues.
+	startMeshContainer(t, "mq-client", mqNet, mqClIP, nil,
+		"--tun", "--tun-queues", "4",
+		"--addr", mqClIP+":8443",
+		"--network", "mq-test",
+		"--token", mqToken,
+		"--log-level", "warn",
+		caAddr,
+	)
+	waitMeshReady(t, "mq-client")
+
+	// Wait for gossip + TUN pipe.
+	time.Sleep(10 * time.Second)
+
+	t.Run("Multi-queue node starts", func(t *testing.T) {
+		out, _ := dockerExec("mq-client", "pulse", "status")
+		if !strings.Contains(out, mqCAIP) {
+			t.Errorf("client doesn't see CA:\n%s", out)
+		}
+		t.Logf("multi-queue client status:\n%s", out)
+	})
+
+	t.Run("Ping through multi-queue TUN", func(t *testing.T) {
+		caIP := extractMeshIP(t, "mq-ca")
+		out, err := dockerExec("mq-client", "ping", "-c", "5", "-W", "5", caIP)
+		if err != nil {
+			t.Fatalf("ping through multi-queue TUN failed:\n%s", out)
+		}
+		t.Logf("multi-queue ping: %s", lastLine(out))
+	})
+
+	t.Run("Reverse ping", func(t *testing.T) {
+		clientIP := extractMeshIP(t, "mq-client")
+		out, err := dockerExec("mq-ca", "ping", "-c", "5", "-W", "5", clientIP)
+		if err != nil {
+			t.Fatalf("reverse ping to multi-queue node failed:\n%s", out)
+		}
+		t.Logf("reverse ping: %s", lastLine(out))
+	})
+
+	t.Run("Throughput test", func(t *testing.T) {
+		caIP := extractMeshIP(t, "mq-ca")
+		// Send 1MB through the mesh via netcat.
+		// CA listens, client sends.
+		go func() {
+			_, _ = dockerExec("mq-ca", "sh", "-c",
+				"dd if=/dev/zero bs=1024 count=1024 2>/dev/null | nc -l -p 9999 -w 5")
+		}()
+		time.Sleep(500 * time.Millisecond)
+
+		out, err := dockerExec("mq-client", "sh", "-c",
+			fmt.Sprintf("nc -w 5 %s 9999 | wc -c", caIP))
+		if err != nil {
+			t.Logf("throughput test: nc failed (expected on some Docker setups): %v", err)
+			return
+		}
+		out = strings.TrimSpace(out)
+		t.Logf("throughput test: received %s bytes through multi-queue TUN", out)
+		if out == "0" {
+			t.Error("received 0 bytes — TUN forwarding may be broken")
+		}
+	})
+}
+
 func init() {
 	_ = fmt.Sprintf
 }

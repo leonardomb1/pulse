@@ -210,6 +210,7 @@ func (s *Scribe) Run(ctx context.Context) {
 	mux.HandleFunc("/api/templates", s.handleTemplates)
 	mux.HandleFunc("/api/groups", s.handleGroups)
 	mux.HandleFunc("/api/bulk", s.handleBulk)
+	mux.HandleFunc("/api/pin", s.handlePin)
 	mux.HandleFunc("/api/remote/restart", s.handleRemoteRestart)
 	mux.HandleFunc("/api/remote/config", s.handleRemoteConfig)
 	mux.HandleFunc("/api/node/", s.handleNodeDetail)
@@ -339,6 +340,7 @@ func (s *Scribe) BuildNodeConfigForPeer(nodeID string) NodeConfig {
 			cfg.ExitEnabled = tmpl.ExitEnabled
 			cfg.ExitCIDRs = tmpl.ExitCIDRs
 			cfg.FECEnabled = tmpl.FECEnabled
+			cfg.TunQueues = tmpl.TunQueues
 			cfg.LogLevel = tmpl.LogLevel
 			break
 		}
@@ -346,6 +348,28 @@ func (s *Scribe) BuildNodeConfigForPeer(nodeID string) NodeConfig {
 	s.mu.RUnlock()
 
 	return cfg
+}
+
+// PinRoute forces traffic to a node through a specific relay.
+func (s *Scribe) PinRoute(nodeID, viaNodeID string) {
+	s.mu.Lock()
+	m := s.nodeMeta[nodeID]
+	m.PinnedVia = viaNodeID
+	s.nodeMeta[nodeID] = m
+	s.mu.Unlock()
+	Infof("scribe: pinned %s via %s", nodeID, viaNodeID)
+	s.broadcastNetConfig()
+}
+
+// UnpinRoute removes a route pin from a node.
+func (s *Scribe) UnpinRoute(nodeID string) {
+	s.mu.Lock()
+	m := s.nodeMeta[nodeID]
+	m.PinnedVia = ""
+	s.nodeMeta[nodeID] = m
+	s.mu.Unlock()
+	Infof("scribe: unpinned %s", nodeID)
+	s.broadcastNetConfig()
 }
 
 // SetTemplate adds or updates a config template for a tag pattern.

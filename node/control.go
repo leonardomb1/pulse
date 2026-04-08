@@ -165,6 +165,10 @@ func (s *ControlServer) handle(conn net.Conn) {
 		s.cmdRemoteRestart(conn, req.NodeID)
 	case "remote-config":
 		s.cmdRemoteConfig(conn, req.NodeID, req.RemoteConfig)
+	case "pin":
+		s.cmdPin(conn, req.NodeID, req.Via)
+	case "unpin":
+		s.cmdUnpin(conn, req.NodeID)
 	case "mesh-ip-set":
 		s.cmdMeshIPSet(conn, req.NodeID, req.MeshIP)
 	case "name-set":
@@ -468,6 +472,32 @@ func (s *ControlServer) cmdRemoteConfig(conn net.Conn, nodeID string, config map
 		s.write(conn, ctrlResponse{Error: err.Error()})
 		return
 	}
+	s.write(conn, ctrlResponse{OK: true})
+}
+
+func (s *ControlServer) cmdPin(conn net.Conn, nodeID, via string) {
+	if nodeID == "" || via == "" {
+		s.write(conn, ctrlResponse{Error: "node_id and via are required"})
+		return
+	}
+	if s.node.scribe == nil {
+		s.write(conn, ctrlResponse{Error: "this node is not the scribe"})
+		return
+	}
+	s.node.scribe.PinRoute(nodeID, via)
+	s.write(conn, ctrlResponse{OK: true})
+}
+
+func (s *ControlServer) cmdUnpin(conn net.Conn, nodeID string) {
+	if nodeID == "" {
+		s.write(conn, ctrlResponse{Error: "node_id is required"})
+		return
+	}
+	if s.node.scribe == nil {
+		s.write(conn, ctrlResponse{Error: "this node is not the scribe"})
+		return
+	}
+	s.node.scribe.UnpinRoute(nodeID)
 	s.write(conn, ctrlResponse{OK: true})
 }
 

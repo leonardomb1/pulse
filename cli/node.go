@@ -147,6 +147,9 @@ func ApplyNodeState(cfg *config.Config, dataDir string, explicitFlags map[string
 	if !explicitFlags["tun"] && nc.TunEnabled {
 		cfg.Tun.Enabled = true
 	}
+	if !explicitFlags["tun-queues"] && nc.TunQueues > 0 {
+		cfg.Tun.Queues = nc.TunQueues
+	}
 	if !explicitFlags["socks"] && nc.SocksEnabled {
 		cfg.SOCKS.Enabled = true
 	}

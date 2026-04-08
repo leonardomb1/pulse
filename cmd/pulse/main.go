@@ -50,6 +50,12 @@ func main() {
 		case "acl":
 			cli.RunACL(os.Args[2:])
 			return
+		case "pin":
+			cli.RunPin(os.Args[2:])
+			return
+		case "unpin":
+			cli.RunUnpin(os.Args[2:])
+			return
 		case "restart":
 			cli.RunRestart(os.Args[2:])
 			return

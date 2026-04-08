@@ -440,6 +440,38 @@ func (s *Scribe) handleMeshIP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handlePin manages route pinning.
+//
+//	PUT    /api/pin {"node_id":"...", "via":"relay-id"}
+//	DELETE /api/pin {"node_id":"..."}
+func (s *Scribe) handlePin(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPut:
+		var req struct {
+			NodeID string `json:"node_id"`
+			Via    string `json:"via"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NodeID == "" || req.Via == "" {
+			http.Error(w, `{"error":"node_id and via required"}`, http.StatusBadRequest)
+			return
+		}
+		s.PinRoute(req.NodeID, req.Via)
+		w.WriteHeader(http.StatusNoContent)
+	case http.MethodDelete:
+		var req struct {
+			NodeID string `json:"node_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NodeID == "" {
+			http.Error(w, `{"error":"node_id required"}`, http.StatusBadRequest)
+			return
+		}
+		s.UnpinRoute(req.NodeID)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // handleGroups returns tag-based group counts.
 //
 //	GET /api/groups

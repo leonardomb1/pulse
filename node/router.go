@@ -25,6 +25,7 @@ const (
 type Router struct {
 	table    *Table
 	registry *LinkRegistry
+	netCfg   *netConfigStore // for route pinning lookups
 }
 
 func NewRouter(table *Table, registry *LinkRegistry) *Router {
@@ -38,6 +39,19 @@ func (r *Router) Resolve(destNodeID string) (Session, error) {
 	// Check we know about the destination at all.
 	if _, ok := r.table.Get(destNodeID); !ok {
 		return nil, fmt.Errorf("no route to node %s", destNodeID)
+	}
+
+	// Route pinning: if the destination has a pinned relay, use it directly.
+	if r.netCfg != nil {
+		meta := r.netCfg.nodeMeta(destNodeID)
+		if meta.PinnedVia != "" {
+			if link, ok := r.registry.Get(meta.PinnedVia); ok && !link.IsClosed() {
+				Debugf("router: pinned route to %s via %s", destNodeID, meta.PinnedVia)
+				return link.session, nil
+			}
+			// Pinned relay not reachable — fall through to normal routing.
+			Warnf("router: pinned relay %s for %s not reachable — using best path", meta.PinnedVia, destNodeID)
+		}
 	}
 
 	type candidate struct {

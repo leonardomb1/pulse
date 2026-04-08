@@ -852,6 +852,30 @@ func RunCASign(args []string) {
 	fmt.Printf("signed cert for node %s → %s/{identity.crt,ca.crt}\n", nodeID, *outDir)
 }
 
+func RunPin(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: pulse pin <node-id> <via-relay-id>")
+		os.Exit(1)
+	}
+	sock := SocketPath(args[2:])
+	if _, err := CtrlDo(sock, map[string]string{"cmd": "pin", "node_id": args[0], "via": args[1]}); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("pinned %s via %s\n", args[0], args[1])
+}
+
+func RunUnpin(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: pulse unpin <node-id>")
+		os.Exit(1)
+	}
+	sock := SocketPath(args[1:])
+	if _, err := CtrlDo(sock, map[string]string{"cmd": "unpin", "node_id": args[0]}); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("unpinned %s\n", args[0])
+}
+
 func RunRestart(args []string) {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "Usage: pulse restart <node-id>")
@@ -977,7 +1001,7 @@ var pulseCommands = []string{
 	"join", "invite", "tag", "untag", "name", "revoke",
 	"acl", "token", "connect", "forward", "dns", "route",
 	"events", "logs", "stats", "mesh-ip",
-	"restart", "groups", "template", "bulk",
+	"restart", "pin", "unpin", "groups", "template", "bulk",
 	"ca", "setup", "completion", "version", "help",
 }
 
@@ -1062,6 +1086,8 @@ Observability:
 
 Fleet:
   pulse restart <node-id>                 restart a remote node
+  pulse pin <node-id> <via-relay-id>      force traffic through a specific relay
+  pulse unpin <node-id>                   remove route pin
   pulse groups                            show tag-based node groups
   pulse template list                     show config templates (scribe API)
   pulse bulk <pattern> <action>           bulk operation by tag pattern (scribe API)
