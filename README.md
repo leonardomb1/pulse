@@ -73,14 +73,25 @@ A team needs all outbound traffic from their mesh to egress through a specific d
 
 Embedded devices behind carrier-grade NAT join the mesh through a cloud relay. The NAT manager detects the indirect path and punches through to establish direct QUIC links between devices. The relay handles signaling only — data flows peer-to-peer at ~1ms instead of ~100ms through the relay.
 
+## Installation
+
+```bash
+# Download and run the installer (Linux amd64/arm64):
+curl -fsSL -o install.sh https://raw.githubusercontent.com/leonardomb1/pulse/main/install.sh
+sh install.sh          # latest version
+sh install.sh v0.2.0   # specific version
+
+# Or build from source:
+go build -o pulse ./cmd/pulse/
+```
+
+The installer requires `sudo` for placing the binary in `/usr/local/bin` and setting Linux capabilities (`CAP_NET_ADMIN` for TUN, `CAP_NET_BIND_SERVICE` for port 443).
+
 ## Quickstart
 
 All configuration is via CLI flags and signed state from the scribe. No config files.
 
 ```bash
-# Build
-go build -o pulse ./cmd/pulse/
-
 # On a server with a public IP — start as CA:
 pulse --ca --scribe --addr relay.example.com:443 --listen :443 \
       --network mynet --token $(openssl rand -hex 32)
