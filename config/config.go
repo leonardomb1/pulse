@@ -76,6 +76,7 @@ type TunConfig struct {
 	Name    string
 	CIDR    string
 	FEC     bool
+	Queues  int // multi-queue TUN readers (default 1, set higher for >1Gbps)
 }
 
 type PersistConfig struct {
@@ -107,8 +108,9 @@ func Defaults() *Config {
 			Listen: "127.0.0.1:8080",
 		},
 		Tun: TunConfig{
-			Name: "pulse0",
-			CIDR: "10.100.0.0/16",
+			Name:   "pulse0",
+			CIDR:   "10.100.0.0/16",
+			Queues: 1,
 		},
 		Persist: PersistConfig{
 			Enabled:  true,

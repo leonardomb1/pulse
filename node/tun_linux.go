@@ -28,7 +28,7 @@ type tunManager struct {
 	node     *Node
 	devName  string
 	meshCIDR string
-	fd       *os.File
+	fds      []*os.File // multi-queue TUN file descriptors
 
 	// Atomic pointer swap — readers never lock.
 	ipToID atomic.Pointer[map[ip4key]string]
@@ -47,14 +47,36 @@ type tunManager struct {
 }
 
 func NewTunDevice(n *Node, devName, meshCIDR string) (TunDevice, error) {
-	fd, err := openTun(devName)
+	queues := n.cfg.Tun.Queues
+	if queues <= 0 {
+		queues = 1
+	}
+	multiQueue := queues > 1
+
+	// Open the first queue (creates the device).
+	fd0, err := openTunQueue(devName, multiQueue)
 	if err != nil {
 		return nil, fmt.Errorf("tun: open %s: %w", devName, err)
+	}
+	fds := []*os.File{fd0}
+
+	// Open additional queues.
+	for i := 1; i < queues; i++ {
+		fd, err := openTunQueue(devName, multiQueue)
+		if err != nil {
+			for _, f := range fds {
+				f.Close()
+			}
+			return nil, fmt.Errorf("tun: open %s queue %d: %w", devName, i, err)
+		}
+		fds = append(fds, fd)
 	}
 
 	meshIP := MeshIPFromNodeIDWithCIDR(n.id, meshCIDR)
 	if err := configureTun(devName, meshIP, meshCIDR); err != nil {
-		fd.Close()
+		for _, f := range fds {
+			f.Close()
+		}
 		return nil, fmt.Errorf("tun: configure %s: %w", devName, err)
 	}
 
@@ -70,12 +92,12 @@ func NewTunDevice(n *Node, devName, meshCIDR string) (TunDevice, error) {
 		configureExitForwarding(meshCIDR)
 	}
 
-	Infof("tun: interface %s up, mesh IP %s/%s", devName, meshIP, meshCIDR)
+	Infof("tun: interface %s up, mesh IP %s/%s (%d queues)", devName, meshIP, meshCIDR, queues)
 	t := &tunManager{
 		node:            n,
 		devName:         devName,
 		meshCIDR:        meshCIDR,
-		fd:              fd,
+		fds:             fds,
 		pipes:           make(map[string]net.Conn),
 		peerQueues:      make(map[string]chan tunPkt),
 		installedRoutes: make(map[string]struct{}),
@@ -89,21 +111,32 @@ func (t *tunManager) Run(ctx context.Context) {
 	go t.refreshMeshIPs(ctx)
 
 	// WireGuard-inspired pipeline:
-	//   single reader → per-peer channel → per-peer writer → pipe
+	//   N readers (one per TUN queue) → per-peer channel → per-peer writer → pipe
 	//
-	// Single reader avoids TUN fd contention.
+	// Multi-queue TUN distributes packets across readers for linear scaling.
 	// Per-peer channels avoid pipe write contention.
 	// Per-peer writers batch-drain their channel for fewer syscalls.
+	for i, fd := range t.fds {
+		if i < len(t.fds)-1 {
+			go t.tunReader(ctx, fd)
+		} else {
+			// Last reader runs on the calling goroutine (blocks).
+			t.tunReader(ctx, fd)
+		}
+	}
+}
+
+func (t *tunManager) tunReader(ctx context.Context, fd *os.File) {
 	buf := make([]byte, 65535)
 	for {
 		if ctx.Err() != nil {
-			t.fd.Close()
+			fd.Close()
 			return
 		}
-		n, err := t.fd.Read(buf)
+		n, err := fd.Read(buf)
 		if err != nil {
 			if ctx.Err() != nil {
-				t.fd.Close()
+				fd.Close()
 				return
 			}
 			continue
@@ -267,7 +300,7 @@ func (t *tunManager) HandleInbound(conn net.Conn) {
 		if err != nil {
 			return
 		}
-		_, werr := t.fd.Write(pkt)
+		_, werr := t.fds[0].Write(pkt)
 		putPktBuf(buf)
 		if werr != nil {
 			tunLog("write to tun: %v", werr)
@@ -330,7 +363,7 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 				// Already handled above.
 			} else if recovered != nil {
 				// A previous missing packet was recovered — write it too.
-				_, _ = t.fd.Write(recovered)
+				_, _ = t.fds[0].Write(recovered)
 			}
 		} else {
 			var err error
@@ -360,7 +393,7 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 				}
 			}
 		}
-		if _, err := t.fd.Write(pkt); err != nil {
+		if _, err := t.fds[0].Write(pkt); err != nil {
 			if buf != nil {
 				putPktBuf(buf)
 			}
@@ -453,7 +486,9 @@ func (t *tunManager) refreshMeshIPs(ctx context.Context) {
 	}
 }
 
-func openTun(name string) (*os.File, error) {
+// openTunQueue opens one TUN queue. With multiQueue=true, multiple fds can
+// be opened for the same device for parallel read/write.
+func openTunQueue(name string, multiQueue bool) (*os.File, error) {
 	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR, 0)
 	if err != nil {
 		return nil, err
@@ -462,6 +497,9 @@ func openTun(name string) (*os.File, error) {
 	var ifr [unix.IFNAMSIZ + 64]byte
 	copy(ifr[:unix.IFNAMSIZ], name)
 	flags := uint16(unix.IFF_TUN | unix.IFF_NO_PI)
+	if multiQueue {
+		flags |= unix.IFF_MULTI_QUEUE
+	}
 	*(*uint16)(unsafe.Pointer(&ifr[unix.IFNAMSIZ])) = flags
 
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd),

@@ -227,6 +227,7 @@ sudo systemctl restart systemd-resolved
 --dns                  DNS server for .pulse TLD
 --dns-listen <addr>    DNS address (default 127.0.0.1:5353)
 --tun                  TUN interface for layer 3 routing (Linux)
+--tun-queues <N>       Multi-queue TUN readers (default 1, set to CPU count for >1Gbps)
 --fec                  Forward error correction on TUN pipes (lossy links)
 --exit                 Exit node (forwards traffic to internet)
 --exit-cidrs <cidrs>   Comma-separated CIDRs this exit node advertises (e.g. 0.0.0.0/0)

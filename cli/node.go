@@ -22,7 +22,7 @@ func NodeFlags(fs *flag.FlagSet) (
 	caEnabled *bool, caToken *string,
 	socksEnabled *bool, socksListen *string,
 	dnsEnabled *bool, dnsListen *string,
-	tunEnabled *bool, fecEnabled *bool,
+	tunEnabled *bool, tunQueues *int, fecEnabled *bool,
 	scribeEnabled *bool, scribeListen *string,
 	exitEnabled *bool, exitCIDRs *string,
 	meshCIDR *string,
@@ -41,6 +41,7 @@ func NodeFlags(fs *flag.FlagSet) (
 	dnsEnabled = fs.Bool("dns", false, "enable DNS server for .pulse")
 	dnsListen = fs.String("dns-listen", "", "DNS listen address (default 127.0.0.1:5353)")
 	tunEnabled = fs.Bool("tun", false, "enable TUN interface (Linux only)")
+	tunQueues = fs.Int("tun-queues", 0, "TUN multi-queue readers (default 1, set to CPU count for high throughput)")
 	fecEnabled = fs.Bool("fec", false, "enable FEC on TUN pipes (lossy links)")
 	scribeEnabled = fs.Bool("scribe", false, "enable scribe (control plane)")
 	scribeListen = fs.String("scribe-listen", "", "scribe HTTP API address (default 127.0.0.1:8080)")
@@ -56,7 +57,7 @@ func ApplyFlags(cfg *config.Config,
 	caEnabled bool, caToken string,
 	socksEnabled bool, socksListen string,
 	dnsEnabled bool, dnsListen string,
-	tunEnabled bool, fecEnabled bool,
+	tunEnabled bool, tunQueues int, fecEnabled bool,
 	scribeEnabled bool, scribeListen string,
 	exitEnabled bool, exitCIDRs string,
 	meshCIDR string,
@@ -109,6 +110,9 @@ func ApplyFlags(cfg *config.Config,
 	}
 	if tunEnabled {
 		cfg.Tun.Enabled = true
+	}
+	if tunQueues > 0 {
+		cfg.Tun.Queues = tunQueues
 	}
 	if fecEnabled {
 		cfg.Tun.FEC = true
@@ -177,7 +181,7 @@ func RunNode(args []string) {
 		caEnabled, caToken,
 		socksEnabled, socksListen,
 		dnsEnabled, dnsListen,
-		tunEnabled, fecEnabled,
+		tunEnabled, tunQueues, fecEnabled,
 		scribeEnabled, scribeListen,
 		exitEnabled, exitCIDRs,
 		meshCIDR := NodeFlags(fs)
@@ -187,7 +191,7 @@ func RunNode(args []string) {
 	cfg := config.Defaults()
 	ApplyFlags(cfg, *wsAddr, *listenAddr, *tcpAddr, *dataDir, *networkID, *joinAddr, *joinToken,
 		*caEnabled, *caToken, *socksEnabled, *socksListen,
-		*dnsEnabled, *dnsListen, *tunEnabled, *fecEnabled, *scribeEnabled, *scribeListen, *exitEnabled, *exitCIDRs, *meshCIDR)
+		*dnsEnabled, *dnsListen, *tunEnabled, *tunQueues, *fecEnabled, *scribeEnabled, *scribeListen, *exitEnabled, *exitCIDRs, *meshCIDR)
 
 	// Load signed state from scribe (if exists). CLI flags take precedence.
 	explicit := make(map[string]bool)

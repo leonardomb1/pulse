@@ -1091,6 +1091,7 @@ Feature flags:
   --dns                  enable DNS server for .pulse
   --dns-listen <addr>    DNS address (default 127.0.0.1:5353)
   --tun                  enable TUN interface (Linux only)
+  --tun-queues <N>       multi-queue TUN readers (default 1, higher for >1Gbps)
   --fec                  forward error correction on TUN pipes (lossy links)
   --exit                 enable exit node
   --exit-cidrs <cidrs>   comma-separated CIDRs this exit node advertises
