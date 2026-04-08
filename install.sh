@@ -49,7 +49,7 @@ echo "  url:      $URL"
 echo ""
 
 # Stop pulse if running.
-if command -v pulse >/dev/null 2>&1 && pulse status >/dev/null 2>&1; then
+if command -v pulse >/dev/null 2>&1; then
     echo "stopping running pulse daemon..."
     pulse stop 2>/dev/null || true
     sleep 1
@@ -75,10 +75,12 @@ echo "  binary:   $ACTUAL_VERSION"
 
 # Install.
 if [ -w "$INSTALL_DIR" ]; then
+    rm -f "$INSTALL_DIR/$BINARY"
     mv "$TMP" "$INSTALL_DIR/$BINARY"
 else
     echo ""
     echo "installing to $INSTALL_DIR (requires sudo)..."
+    sudo rm -f "$INSTALL_DIR/$BINARY"
     sudo mv "$TMP" "$INSTALL_DIR/$BINARY"
 fi
 
