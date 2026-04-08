@@ -94,8 +94,11 @@ else
     echo "  sudo setcap cap_net_admin,cap_net_bind_service=+ep $INSTALL_DIR/$BINARY"
 fi
 
+# Clear cached command paths.
+hash -r 2>/dev/null || true
+
 echo ""
-echo "installed: $(pulse version 2>/dev/null || echo "$INSTALL_DIR/$BINARY")"
+echo "installed: $("$INSTALL_DIR/$BINARY" version 2>/dev/null || echo "$INSTALL_DIR/$BINARY")"
 echo ""
 echo "quickstart:"
 echo "  pulse join <relay-addr> --token <token>"
