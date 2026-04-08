@@ -18,14 +18,16 @@ type DNSZone struct {
 // NodeMeta holds operator-assigned metadata for a node (name, tags).
 // Managed by the scribe and distributed via NetworkConfig.
 type NodeMeta struct {
-	Name string   `json:"name,omitempty"`
-	Tags []string `json:"tags,omitempty"`
+	Name   string   `json:"name,omitempty"`
+	Tags   []string `json:"tags,omitempty"`
+	MeshIP string   `json:"mesh_ip,omitempty"` // operator-assigned mesh IP override
 }
 
 // NetworkConfig is the authoritative network-wide configuration distributed by
 // the scribe node. Nodes merge by keeping the entry with the highest Version.
 type NetworkConfig struct {
 	Version    int64               `json:"version"`               // monotonically increasing (unix milliseconds)
+	MeshCIDR   string              `json:"mesh_cidr,omitempty"`   // network-wide mesh IP range (e.g. "10.100.0.0/16")
 	RevokedIDs []string            `json:"revoked_ids"`           // node IDs whose certificates have been revoked
 	DNSZones   []DNSZone           `json:"dns_zones"`             // additional DNS records served by all nodes
 	GlobalACLs []NodeACL           `json:"global_acls"`           // network-wide ACL additions
@@ -62,6 +64,74 @@ func VerifyNetConfig(snc SignedNetConfig, pub ed25519.PublicKey) error {
 		return fmt.Errorf("netconfig: invalid signature from scribe %s", snc.ScribeID)
 	}
 	return nil
+}
+
+// NodeConfig is the per-node configuration managed by the scribe.
+// It replaces config.toml for runtime settings — nodes receive this via mesh
+// and persist it to state.dat.
+type NodeConfig struct {
+	Version           int64    `json:"version"`
+	TunEnabled        bool     `json:"tun_enabled"`
+	SocksEnabled      bool     `json:"socks_enabled"`
+	DNSEnabled        bool     `json:"dns_enabled"`
+	ExitEnabled       bool     `json:"exit_enabled"`
+	ExitCIDRs         []string `json:"exit_cidrs,omitempty"`
+	FECEnabled        bool     `json:"fec_enabled"`
+	MeshIP            string   `json:"mesh_ip,omitempty"`
+	MeshCIDR          string   `json:"mesh_cidr,omitempty"`
+	LogLevel          string   `json:"log_level,omitempty"`
+	BandwidthLimitBps int64    `json:"bandwidth_limit_bps,omitempty"` // 0 = unlimited
+}
+
+// SignedNodeConfig wraps a NodeConfig with a scribe signature.
+type SignedNodeConfig struct {
+	Config    NodeConfig `json:"config"`
+	Signature []byte     `json:"sig"`
+	ScribeID  string     `json:"scribe_id"`
+}
+
+// SignNodeConfig signs a per-node config with the scribe's private key.
+func SignNodeConfig(cfg NodeConfig, priv ed25519.PrivateKey, scribeID string) (SignedNodeConfig, error) {
+	payload, err := json.Marshal(cfg)
+	if err != nil {
+		return SignedNodeConfig{}, err
+	}
+	sig := ed25519.Sign(priv, payload)
+	return SignedNodeConfig{Config: cfg, Signature: sig, ScribeID: scribeID}, nil
+}
+
+// VerifyNodeConfig checks the signature on a SignedNodeConfig.
+func VerifyNodeConfig(snc SignedNodeConfig, pub ed25519.PublicKey) error {
+	payload, err := json.Marshal(snc.Config)
+	if err != nil {
+		return err
+	}
+	if !ed25519.Verify(pub, payload, snc.Signature) {
+		return fmt.Errorf("nodeconfig: invalid signature from scribe %s", snc.ScribeID)
+	}
+	return nil
+}
+
+// nodeStateStore is the node-local store for signed per-node config from the scribe.
+type nodeStateStore struct {
+	mu      sync.RWMutex
+	current *SignedNodeConfig
+}
+
+func (s *nodeStateStore) get() *SignedNodeConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.current
+}
+
+func (s *nodeStateStore) merge(snc SignedNodeConfig) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.current == nil || snc.Config.Version > s.current.Config.Version {
+		s.current = &snc
+		return true
+	}
+	return false
 }
 
 // netConfigStore is the node-local store for the current signed network config.

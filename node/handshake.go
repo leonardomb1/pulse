@@ -36,7 +36,7 @@ func (n *Node) sendHandshake(session Session) {
 	// Include mesh IP if tun is active.
 	meshIP := ""
 	if n.cfg.Tun.Enabled {
-		meshIP = MeshIPFromNodeID(n.id).String()
+		meshIP = n.meshIPForNode(n.id).String()
 	}
 
 	scribeAPIAddr := ""
@@ -45,6 +45,7 @@ func (n *Node) sendHandshake(session Session) {
 	}
 	msg := streamMsg{
 		Type:          "handshake",
+		Version:       n.version,
 		NodeID:        n.id,
 		NetworkID:     n.cfg.Node.NetworkID,
 		Addr:          n.cfg.Node.Addr,
@@ -163,6 +164,10 @@ func (n *Node) dispatchStream(ac *authedConn) {
 		}
 		HandleRelayStream(ac.Conn, reader, req, n.id, callerID, n.router, n.aclTable, n.netCfg.nodeMeta, &n.traffic)
 
+	case "remote_cmd":
+		n.handleRemoteCmd(msg)
+		ac.Close()
+
 	default:
 		Infof("unknown stream type: %q", msg.Type)
 		ac.Close()
@@ -197,6 +202,9 @@ func (n *Node) mergeNetConfig(snc SignedNetConfig) {
 		if entry, ok := n.table.Get(nodeID); ok {
 			entry.Name = meta.Name
 			entry.Tags = meta.Tags
+			if meta.MeshIP != "" {
+				entry.MeshIP = meta.MeshIP
+			}
 			n.table.UpsertForce(entry)
 		}
 	}
@@ -273,6 +281,7 @@ func (n *Node) handleHandshake(msg streamMsg, ac *authedConn) {
 		IsScribe:      msg.IsScribe,
 		ScribeAPIAddr: msg.ScribeAPIAddr,
 		MeshIP:        msg.MeshIP,
+		Version:       msg.Version,
 		LastSeen:      time.Now(),
 		HopCount:      0,
 	})

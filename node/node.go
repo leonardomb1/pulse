@@ -20,6 +20,7 @@ type streamMsg struct {
 	Type string `json:"type"`
 
 	// handshake
+	Version       string `json:"version,omitempty"`
 	NodeID        string `json:"node_id,omitempty"`
 	NetworkID     string `json:"network_id,omitempty"`
 	Addr          string `json:"addr,omitempty"`
@@ -58,11 +59,16 @@ type streamMsg struct {
 
 	// revoke (forwarded to scribe over mesh)
 	RevokeNodeID string `json:"revoke_node_id,omitempty"`
+
+	// remote command (sent by scribe to target node)
+	RemoteCmd    string            `json:"remote_cmd,omitempty"`    // "restart", "config"
+	RemoteConfig map[string]string `json:"remote_config,omitempty"` // key-value config overrides
 }
 
 // Node is a running relay instance.
 type Node struct {
 	id         string
+	version    string
 	cfg        *config.Config
 	identity   *Identity
 	ca         *CA
@@ -89,7 +95,7 @@ type Node struct {
 	lastFullGossip   time.Time         // time of last full table push
 }
 
-func New(cfg *config.Config, ca *CA) (*Node, error) {
+func New(cfg *config.Config, ca *CA, version string) (*Node, error) {
 	identity, err := LoadOrCreateIdentity(cfg.Node.DataDir)
 	if err != nil {
 		return nil, err
@@ -142,6 +148,7 @@ func New(cfg *config.Config, ca *CA) (*Node, error) {
 
 	n := &Node{
 		id:             identity.NodeID,
+		version:        version,
 		cfg:            cfg,
 		identity:       identity,
 		ca:             ca,
@@ -227,7 +234,7 @@ func New(cfg *config.Config, ca *CA) (*Node, error) {
 			n.tun = tun
 			// Advertise mesh IP in gossip self-entry.
 			if self, ok := table.Get(identity.NodeID); ok {
-				self.MeshIP = MeshIPFromNodeID(identity.NodeID).String()
+				self.MeshIP = MeshIPFromNodeIDWithCIDR(identity.NodeID, cfg.Tun.CIDR).String()
 				table.UpsertForce(self)
 			}
 		}
@@ -392,6 +399,69 @@ func (n *Node) sampleStats() {
 		}
 		n.statsRing.Record(entry.NodeID, snap)
 	}
+}
+
+// handleRemoteCmd processes a remote command from the scribe.
+func (n *Node) handleRemoteCmd(msg streamMsg) {
+	switch msg.RemoteCmd {
+	case "restart":
+		Warnf("remote: restart command received — restarting")
+		n.emitEvent(EventEntry{Type: EventStartup, Detail: "remote restart triggered"})
+		go func() {
+			time.Sleep(500 * time.Millisecond) // let the ack stream close
+			n.Stop()
+		}()
+	case "config":
+		Infof("remote: config update received: %v", msg.RemoteConfig)
+		n.emitEvent(EventEntry{Type: EventStartup, Detail: "remote config push"})
+		// Apply runtime-safe config changes.
+		if v, ok := msg.RemoteConfig["log_level"]; ok {
+			SetLogLevel(ParseLogLevel(v))
+			Infof("remote: log level changed to %s", v)
+		}
+	default:
+		Warnf("remote: unknown command %q", msg.RemoteCmd)
+	}
+}
+
+// SendRemoteCmd sends a remote command to a target node via the mesh.
+func (n *Node) SendRemoteCmd(targetNodeID string, cmd string, config map[string]string) error {
+	session, err := n.router.Resolve(targetNodeID)
+	if err != nil {
+		return fmt.Errorf("no route to %s: %w", targetNodeID, err)
+	}
+	conn, err := session.Open()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	msg, _ := marshalStreamMsg(streamMsg{
+		Type:         "remote_cmd",
+		RemoteCmd:    cmd,
+		RemoteConfig: config,
+	})
+	_, _ = conn.Write(msg)
+	return nil
+}
+
+// meshCIDR returns the active mesh CIDR — from NetworkConfig if available, otherwise from local config.
+func (n *Node) meshCIDR() string {
+	if snc := n.netCfg.get(); snc != nil && snc.Config.MeshCIDR != "" {
+		return snc.Config.MeshCIDR
+	}
+	return n.cfg.Tun.CIDR
+}
+
+// meshIPForNode returns the mesh IP for a node, respecting manual overrides and network CIDR.
+func (n *Node) meshIPForNode(nodeID string) net.IP {
+	// Check for operator-assigned override in NodeMeta.
+	meta := n.netCfg.nodeMeta(nodeID)
+	if meta.MeshIP != "" {
+		if ip := net.ParseIP(meta.MeshIP); ip != nil {
+			return ip.To4()
+		}
+	}
+	return MeshIPFromNodeIDWithCIDR(nodeID, n.meshCIDR())
 }
 
 // emitEvent writes an event to the event log if available.

@@ -2,12 +2,17 @@ package node
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -181,6 +186,8 @@ func (s *Scribe) Run(ctx context.Context) {
 		}
 	}()
 
+	apiKey := s.loadOrCreateAPIKey()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/nodes", s.handleNodes)
@@ -190,12 +197,19 @@ func (s *Scribe) Run(ctx context.Context) {
 	mux.HandleFunc("/api/acls", s.handleACLs)
 	mux.HandleFunc("/api/tags", s.handleTags)
 	mux.HandleFunc("/api/name", s.handleName)
+	mux.HandleFunc("/api/mesh-ip", s.handleMeshIP)
+	mux.HandleFunc("/api/remote/restart", s.handleRemoteRestart)
+	mux.HandleFunc("/api/remote/config", s.handleRemoteConfig)
+	mux.HandleFunc("/api/node/", s.handleNodeDetail)
 	mux.HandleFunc("/api/routes", s.handleRoutes)
-	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.HandleFunc("/metrics", s.handleMetrics) // no auth — Prometheus scraping
+
+	// Wrap API routes with Bearer token auth.
+	handler := s.authMiddleware(apiKey, mux)
 
 	srv := &http.Server{
 		Addr:    s.node.cfg.Scribe.Listen,
-		Handler: mux,
+		Handler: handler,
 	}
 
 	go func() {
@@ -207,6 +221,56 @@ func (s *Scribe) Run(ctx context.Context) {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		Errorf("scribe: HTTP API error: %v", err)
 	}
+}
+
+// loadOrCreateAPIKey reads or generates the scribe API key.
+func (s *Scribe) loadOrCreateAPIKey() string {
+	keyPath := filepath.Join(s.node.cfg.Node.DataDir, "scribe-api-key")
+	if data, err := os.ReadFile(keyPath); err == nil {
+		key := strings.TrimSpace(string(data))
+		if key != "" {
+			Infof("scribe: API key loaded from %s", keyPath)
+			return key
+		}
+	}
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	key := hex.EncodeToString(b)
+	if err := os.WriteFile(keyPath, []byte(key+"\n"), 0600); err != nil {
+		Warnf("scribe: could not persist API key: %v", err)
+	}
+	Infof("scribe: API key generated and saved to %s", keyPath)
+	return key
+}
+
+// authMiddleware wraps an http.Handler with Bearer token authentication.
+// The /metrics endpoint is exempt (Prometheus needs unauthenticated access).
+func (s *Scribe) authMiddleware(apiKey string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip auth for metrics endpoint.
+		if r.URL.Path == "/metrics" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Skip auth for requests from localhost if no Authorization header is set.
+		// This preserves backwards compatibility with the control socket CLI.
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			host, _, _ := net.SplitHostPort(r.RemoteAddr)
+			if host == "127.0.0.1" || host == "::1" || host == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			http.Error(w, `{"error":"authorization required"}`, http.StatusUnauthorized)
+			return
+		}
+		token := strings.TrimPrefix(auth, "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(token), []byte(apiKey)) != 1 {
+			http.Error(w, `{"error":"invalid API key"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // AcceptStats stores a stats report from a peer node.
@@ -262,6 +326,7 @@ func (s *Scribe) buildNetConfig() NetworkConfig {
 	s.version++
 	return NetworkConfig{
 		Version:    time.Now().UnixMilli() + s.version, // monotonically increasing
+		MeshCIDR:   s.node.cfg.Tun.CIDR,
 		RevokedIDs: revoked,
 		DNSZones:   s.dnsZones,
 		GlobalACLs: s.globalACLs,
@@ -331,6 +396,18 @@ func (s *Scribe) SetName(nodeID, name string) {
 	s.nodeMeta[nodeID] = m
 	s.mu.Unlock()
 	Infof("scribe: set name %s → %q", nodeID, name)
+	s.broadcastNetConfig()
+}
+
+// SetMeshIP assigns a manual mesh IP override to a node.
+func (s *Scribe) SetMeshIP(nodeID, meshIP string) {
+	s.mu.Lock()
+	m := s.nodeMeta[nodeID]
+	m.MeshIP = meshIP
+	s.nodeMeta[nodeID] = m
+	s.mu.Unlock()
+	Infof("scribe: set mesh IP %s → %s", nodeID, meshIP)
+	s.node.emitEvent(EventEntry{Type: EventTagChanged, NodeID: nodeID, Detail: "mesh_ip=" + meshIP})
 	s.broadcastNetConfig()
 }
 

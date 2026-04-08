@@ -25,6 +25,7 @@ func NodeFlags(fs *flag.FlagSet) (
 	tunEnabled *bool, fecEnabled *bool,
 	scribeEnabled *bool, scribeListen *string,
 	exitEnabled *bool, exitCIDRs *string,
+	meshCIDR *string,
 ) {
 	configPath = fs.String("config", "", "path to config.toml (optional)")
 	dataDir = fs.String("data-dir", "", "persistent data directory (default ~/.pulse)")
@@ -46,6 +47,7 @@ func NodeFlags(fs *flag.FlagSet) (
 	scribeListen = fs.String("scribe-listen", "", "scribe HTTP API address (default 127.0.0.1:8080)")
 	exitEnabled = fs.Bool("exit", false, "enable exit node")
 	exitCIDRs = fs.String("exit-cidrs", "", "comma-separated CIDRs this exit node advertises (e.g. 0.0.0.0/0)")
+	meshCIDR = fs.String("mesh-cidr", "", "mesh IP range (default 10.100.0.0/16)")
 	return
 }
 
@@ -58,6 +60,7 @@ func ApplyFlags(cfg *config.Config,
 	tunEnabled bool, fecEnabled bool,
 	scribeEnabled bool, scribeListen string,
 	exitEnabled bool, exitCIDRs string,
+	meshCIDR string,
 ) {
 	if dataDir != "" {
 		cfg.Node.DataDir = dataDir
@@ -123,9 +126,15 @@ func ApplyFlags(cfg *config.Config,
 	if exitCIDRs != "" {
 		cfg.Exit.CIDRs = strings.Split(exitCIDRs, ",")
 	}
+	if meshCIDR != "" {
+		cfg.Tun.CIDR = meshCIDR
+	}
 }
 
 // RunNode starts a relay node. Called when pulse is run with no subcommand.
+// NodeVersion is set by main.go from ldflags.
+var NodeVersion = "dev"
+
 func RunNode(args []string) {
 	fs := flag.NewFlagSet("pulse", flag.ExitOnError)
 	configPath, wsAddr, listenAddr, tcpAddr, dataDir, networkID, joinAddr, joinToken,
@@ -134,7 +143,8 @@ func RunNode(args []string) {
 		dnsEnabled, dnsListen,
 		tunEnabled, fecEnabled,
 		scribeEnabled, scribeListen,
-		exitEnabled, exitCIDRs := NodeFlags(fs)
+		exitEnabled, exitCIDRs,
+		meshCIDR := NodeFlags(fs)
 	logLevelFlag := fs.String("log-level", "", "log level: debug, info, warn, error (default: info)")
 	_ = fs.Parse(args)
 
@@ -144,7 +154,7 @@ func RunNode(args []string) {
 	}
 	ApplyFlags(cfg, *wsAddr, *listenAddr, *tcpAddr, *dataDir, *networkID, *joinAddr, *joinToken,
 		*caEnabled, *caToken, *socksEnabled, *socksListen,
-		*dnsEnabled, *dnsListen, *tunEnabled, *fecEnabled, *scribeEnabled, *scribeListen, *exitEnabled, *exitCIDRs)
+		*dnsEnabled, *dnsListen, *tunEnabled, *fecEnabled, *scribeEnabled, *scribeListen, *exitEnabled, *exitCIDRs, *meshCIDR)
 
 	ll := *logLevelFlag
 	if ll == "" {
@@ -181,7 +191,7 @@ func RunNode(args []string) {
 		log.Printf("CA loaded from %s", caDir)
 	}
 
-	n, err := node.New(cfg, ca)
+	n, err := node.New(cfg, ca, NodeVersion)
 	if err != nil {
 		log.Fatalf("init node: %v", err)
 	}

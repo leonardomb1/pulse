@@ -116,6 +116,10 @@ type ctrlRequest struct {
 	MaxUses int    `json:"max_uses,omitempty"`
 	// token-revoke
 	TokenPrefix string `json:"token_prefix,omitempty"`
+	// mesh-ip-set
+	MeshIP string `json:"mesh_ip,omitempty"`
+	// remote-config
+	RemoteConfig map[string]string `json:"remote_config,omitempty"`
 	// events filter
 	EventType string `json:"event_type,omitempty"`
 	Since     string `json:"since,omitempty"`
@@ -157,6 +161,12 @@ func (s *ControlServer) handle(conn net.Conn) {
 		s.cmdTagAdd(conn, req.NodeID, req.Tag)
 	case "tag-remove":
 		s.cmdTagRemove(conn, req.NodeID, req.Tag)
+	case "remote-restart":
+		s.cmdRemoteRestart(conn, req.NodeID)
+	case "remote-config":
+		s.cmdRemoteConfig(conn, req.NodeID, req.RemoteConfig)
+	case "mesh-ip-set":
+		s.cmdMeshIPSet(conn, req.NodeID, req.MeshIP)
 	case "name-set":
 		s.cmdNameSet(conn, req.NodeID, req.Name)
 	case "acl-list":
@@ -193,7 +203,7 @@ func (s *ControlServer) cmdStatus(conn net.Conn) {
 	meta := s.node.netCfg.allNodeMeta()
 	for i := range peers {
 		if peers[i].MeshIP == "" {
-			peers[i].MeshIP = MeshIPFromNodeID(peers[i].NodeID).String()
+			peers[i].MeshIP = s.node.meshIPForNode(peers[i].NodeID).String()
 		}
 		// Overlay scribe-managed metadata.
 		if m, ok := meta[peers[i].NodeID]; ok {
@@ -427,6 +437,51 @@ func (s *ControlServer) cmdNameSet(conn net.Conn, nodeID, name string) {
 		return
 	}
 	s.node.scribe.SetName(nodeID, name)
+	s.write(conn, ctrlResponse{OK: true})
+}
+
+func (s *ControlServer) cmdRemoteRestart(conn net.Conn, nodeID string) {
+	if nodeID == "" {
+		s.write(conn, ctrlResponse{Error: "node_id is required"})
+		return
+	}
+	if err := s.node.SendRemoteCmd(nodeID, "restart", nil); err != nil {
+		s.write(conn, ctrlResponse{Error: err.Error()})
+		return
+	}
+	s.write(conn, ctrlResponse{OK: true})
+}
+
+func (s *ControlServer) cmdRemoteConfig(conn net.Conn, nodeID string, config map[string]string) {
+	if nodeID == "" {
+		s.write(conn, ctrlResponse{Error: "node_id is required"})
+		return
+	}
+	if len(config) == 0 {
+		s.write(conn, ctrlResponse{Error: "remote_config is required"})
+		return
+	}
+	if err := s.node.SendRemoteCmd(nodeID, "config", config); err != nil {
+		s.write(conn, ctrlResponse{Error: err.Error()})
+		return
+	}
+	s.write(conn, ctrlResponse{OK: true})
+}
+
+func (s *ControlServer) cmdMeshIPSet(conn net.Conn, nodeID, meshIP string) {
+	if nodeID == "" || meshIP == "" {
+		s.write(conn, ctrlResponse{Error: "node_id and mesh_ip are required"})
+		return
+	}
+	if s.node.scribe == nil {
+		s.write(conn, ctrlResponse{Error: "this node is not the scribe"})
+		return
+	}
+	if ip := net.ParseIP(meshIP); ip == nil {
+		s.write(conn, ctrlResponse{Error: "invalid IP address: " + meshIP})
+		return
+	}
+	s.node.scribe.SetMeshIP(nodeID, meshIP)
 	s.write(conn, ctrlResponse{OK: true})
 }
 

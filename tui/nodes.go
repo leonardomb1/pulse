@@ -15,7 +15,7 @@ func (a *App) renderNodes() {
 	t := a.nodesTable
 	t.Clear()
 
-	headers := []string{"NODE ID", "NAME", "MESH IP", "ADDR", "LINK", "LATENCY", "LOSS", "HOPS", "ROLES", "TAGS", "LAST SEEN"}
+	headers := []string{"NODE ID", "NAME", "MESH IP", "ADDR", "LINK", "LATENCY", "LOSS", "HOPS", "VER", "ROLES", "TAGS", "LAST SEEN"}
 	if a.isScribe {
 		headers = append(headers, "TX", "RX", "CONNS")
 	}
@@ -109,6 +109,11 @@ func (a *App) renderNodes() {
 		set(cellFn(latency))
 		set(cellFn(loss))
 		set(cellFn(fmt.Sprint(p.HopCount)))
+		ver := p.Version
+		if ver == "" {
+			ver = "-"
+		}
+		set(dimCell(ver))
 		set(cellFn(roles))
 		set(cellFn(tags))
 		set(dimCell(lastSeen))

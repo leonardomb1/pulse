@@ -46,7 +46,7 @@ func startTestDaemon(t *testing.T, opts ...func(*config.Config)) (string, func()
 		t.Fatalf("init CA: %v", err)
 	}
 
-	n, err := node.New(cfg, ca)
+	n, err := node.New(cfg, ca, "test")
 	if err != nil {
 		t.Fatalf("init node: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestIntegrationNonScribeRejects(t *testing.T) {
 
 	node.SetLogLevel(node.LevelError)
 
-	n, err := node.New(cfg, nil)
+	n, err := node.New(cfg, nil, "test")
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}

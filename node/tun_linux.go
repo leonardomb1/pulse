@@ -52,7 +52,7 @@ func NewTunDevice(n *Node, devName, meshCIDR string) (TunDevice, error) {
 		return nil, fmt.Errorf("tun: open %s: %w", devName, err)
 	}
 
-	meshIP := MeshIPFromNodeID(n.id)
+	meshIP := MeshIPFromNodeIDWithCIDR(n.id, meshCIDR)
 	if err := configureTun(devName, meshIP, meshCIDR); err != nil {
 		fd.Close()
 		return nil, fmt.Errorf("tun: configure %s: %w", devName, err)

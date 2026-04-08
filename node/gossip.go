@@ -50,6 +50,9 @@ type PeerEntry struct {
 	// Tun device — mesh IP assigned to this node.
 	MeshIP string `json:"mesh_ip,omitempty"`
 
+	// Binary version reported by the node in its handshake.
+	Version string `json:"version,omitempty"`
+
 	// Operator-assigned metadata (populated from NetworkConfig, not gossipped).
 	Name string   `json:"name,omitempty"`
 	Tags []string `json:"tags,omitempty"`

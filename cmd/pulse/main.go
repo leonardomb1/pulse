@@ -11,6 +11,7 @@ import (
 var version = "dev"
 
 func main() {
+	cli.NodeVersion = version
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "start":
@@ -36,6 +37,9 @@ func main() {
 			return
 		case "untag":
 			cli.RunUntag(os.Args[2:])
+			return
+		case "mesh-ip":
+			cli.RunMeshIP(os.Args[2:])
 			return
 		case "name":
 			cli.RunSetName(os.Args[2:])

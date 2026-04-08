@@ -18,18 +18,61 @@ type TunDevice interface {
 	RefreshMeshIPs()
 }
 
-// MeshIPFromNodeID derives a deterministic mesh IP from a node ID string.
-// nodeID is a 16-char hex string; we use the first 4 hex chars (2 bytes).
-// Result is in the range 10.100.0.0–10.100.255.255.
+// MeshIPFromNodeID derives a deterministic mesh IP from a node ID string
+// within the configured mesh CIDR. The host part is derived from the first
+// 4 hex chars of the nodeID (2 bytes), combined with the network prefix.
 func MeshIPFromNodeID(nodeID string) net.IP {
-	if len(nodeID) < 4 {
+	return MeshIPFromNodeIDWithCIDR(nodeID, "10.100.0.0/16")
+}
+
+// MeshIPFromNodeIDWithCIDR derives a mesh IP within the given CIDR.
+func MeshIPFromNodeIDWithCIDR(nodeID, cidr string) net.IP {
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
 		return net.IP{10, 100, 0, 1}
+	}
+
+	if len(nodeID) < 4 {
+		ip := make(net.IP, 4)
+		copy(ip, ipNet.IP.To4())
+		ip[3] = 1
+		return ip
 	}
 	b, err := hex.DecodeString(nodeID[:4])
 	if err != nil || len(b) < 2 {
-		return net.IP{10, 100, 0, 1}
+		ip := make(net.IP, 4)
+		copy(ip, ipNet.IP.To4())
+		ip[3] = 1
+		return ip
 	}
-	return net.IP{10, 100, b[0], b[1]}
+
+	prefix := ipNet.IP.To4()
+	mask := ipNet.Mask
+	ones, _ := mask.Size()
+
+	// Build host bits from nodeID hash, apply to network prefix.
+	ip := make(net.IP, 4)
+	copy(ip, prefix)
+
+	// For /16: bytes 2-3 are host. For /24: byte 3 is host. For /8: bytes 1-3.
+	switch {
+	case ones <= 8:
+		ip[1] = b[0]
+		ip[2] = b[1]
+		ip[3] = b[0] ^ b[1]
+	case ones <= 16:
+		ip[2] = b[0]
+		ip[3] = b[1]
+	case ones <= 24:
+		ip[3] = b[0]
+	}
+
+	// Avoid network address (all zeros host) and broadcast (all ones host).
+	if ip.Equal(ipNet.IP) {
+		ip[3] |= 1
+	}
+
+	return ip
 }
 
 // Packet pool: reuse 64KB buffers to avoid per-packet GC pressure.

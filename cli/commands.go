@@ -73,7 +73,7 @@ func RunStatus(args []string) {
 	_ = json.Unmarshal(resp["peers"], &peers)
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NODE ID\tNAME\tADDR\tMESH IP\tLINK\tLATENCY\tLOSS%\tHOPS\tROLES\tTAGS\tLAST SEEN")
+	fmt.Fprintln(tw, "NODE ID\tNAME\tADDR\tMESH IP\tLINK\tLATENCY\tLOSS%\tHOPS\tVERSION\tROLES\tTAGS\tLAST SEEN")
 	for _, p := range peers {
 		meshIP := p.MeshIP
 		if meshIP == "" {
@@ -114,8 +114,12 @@ func RunStatus(args []string) {
 		if len(p.Tags) > 0 {
 			tags = strings.Join(p.Tags, ",")
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
-			p.NodeID, name, p.Addr, meshIP, linkType, latency, loss, p.HopCount, roles, tags, lastSeen)
+		ver := p.Version
+		if ver == "" {
+			ver = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+			p.NodeID, name, p.Addr, meshIP, linkType, latency, loss, p.HopCount, ver, roles, tags, lastSeen)
 	}
 	tw.Flush()
 }
@@ -260,6 +264,20 @@ func RunCert(args []string) {
 			}
 		}
 	}
+}
+
+func RunMeshIP(args []string) {
+	if len(args) < 2 {
+		fmt.Println("Usage: pulse mesh-ip <node-id> <ip>")
+		os.Exit(1)
+	}
+	sock := SocketPath(args[2:])
+	if _, err := CtrlDo(sock, map[string]string{
+		"cmd": "mesh-ip-set", "node_id": args[0], "mesh_ip": args[1],
+	}); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("mesh IP %s → %s\n", args[0], args[1])
 }
 
 func RunJoin(args []string) {

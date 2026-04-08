@@ -3,7 +3,9 @@ package node
 import (
 	"encoding/json"
 	"maps"
+	"net"
 	"net/http"
+	"strings"
 )
 
 func (s *Scribe) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -14,7 +16,7 @@ func (s *Scribe) handleStatus(w http.ResponseWriter, r *http.Request) {
 	peers := s.node.table.Snapshot()
 	for i := range peers {
 		if peers[i].MeshIP == "" {
-			peers[i].MeshIP = MeshIPFromNodeID(peers[i].NodeID).String()
+			peers[i].MeshIP = s.node.meshIPForNode(peers[i].NodeID).String()
 		}
 	}
 
@@ -263,5 +265,157 @@ func (s *Scribe) handleName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.SetName(req.NodeID, req.Name)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleMeshIP assigns a manual mesh IP override to a node.
+//
+//	PUT /api/mesh-ip {"node_id":"...", "mesh_ip":"10.100.1.50"}
+func (s *Scribe) handleMeshIP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		NodeID string `json:"node_id"`
+		MeshIP string `json:"mesh_ip"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NodeID == "" || req.MeshIP == "" {
+		http.Error(w, `{"error":"node_id and mesh_ip required"}`, http.StatusBadRequest)
+		return
+	}
+	if ip := net.ParseIP(req.MeshIP); ip == nil {
+		http.Error(w, `{"error":"invalid IP address"}`, http.StatusBadRequest)
+		return
+	}
+	s.SetMeshIP(req.NodeID, req.MeshIP)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleNodeDetail returns detailed information about a single node.
+//
+//	GET /api/node/<node-id>
+func (s *Scribe) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Extract node ID from path: /api/node/<id>
+	nodeID := strings.TrimPrefix(r.URL.Path, "/api/node/")
+	if nodeID == "" {
+		http.Error(w, `{"error":"node_id required in path"}`, http.StatusBadRequest)
+		return
+	}
+
+	entry, ok := s.node.table.Get(nodeID)
+	if !ok {
+		http.Error(w, `{"error":"node not found"}`, http.StatusNotFound)
+		return
+	}
+
+	if entry.MeshIP == "" {
+		entry.MeshIP = s.node.meshIPForNode(entry.NodeID).String()
+	}
+
+	// Overlay metadata.
+	meta := s.node.netCfg.nodeMeta(nodeID)
+
+	// Link info from registry.
+	linkType := "none"
+	if link, ok := s.node.registry.Get(nodeID); ok && !link.IsClosed() {
+		switch {
+		case link.ViaNAT:
+			linkType = "direct_quic"
+		case link.Transport() == "quic":
+			linkType = "quic"
+		default:
+			linkType = "websocket"
+		}
+	}
+
+	// Stats from scribe.
+	var stats *NodeStats
+	s.mu.RLock()
+	if st, ok := s.stats[nodeID]; ok {
+		stats = &st
+	}
+	s.mu.RUnlock()
+
+	resp := struct {
+		NodeID    string     `json:"node_id"`
+		Name      string     `json:"name"`
+		MeshIP    string     `json:"mesh_ip"`
+		Addr      string     `json:"addr"`
+		LinkType  string     `json:"link_type"`
+		LatencyMS float64    `json:"latency_ms"`
+		LossRate  float64    `json:"loss_rate"`
+		HopCount  int        `json:"hop_count"`
+		Version   string     `json:"version"`
+		IsCA      bool       `json:"is_ca"`
+		IsScribe  bool       `json:"is_scribe"`
+		IsExit    bool       `json:"is_exit"`
+		Tags      []string   `json:"tags"`
+		LastSeen  string     `json:"last_seen"`
+		Stats     *NodeStats `json:"stats,omitempty"`
+	}{
+		NodeID:    entry.NodeID,
+		Name:      meta.Name,
+		MeshIP:    entry.MeshIP,
+		Addr:      entry.Addr,
+		LinkType:  linkType,
+		LatencyMS: entry.LatencyMS,
+		LossRate:  entry.LossRate,
+		HopCount:  entry.HopCount,
+		Version:   entry.Version,
+		IsCA:      entry.IsCA,
+		IsScribe:  entry.IsScribe,
+		IsExit:    entry.IsExit,
+		Tags:      meta.Tags,
+		LastSeen:  entry.LastSeen.Format("2006-01-02T15:04:05Z"),
+		Stats:     stats,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Scribe) handleRemoteRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NodeID == "" {
+		http.Error(w, `{"error":"node_id required"}`, http.StatusBadRequest)
+		return
+	}
+	if err := s.node.SendRemoteCmd(req.NodeID, "restart", nil); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRemoteConfig pushes config changes to a remote node.
+//
+//	POST /api/remote/config {"node_id":"...", "config":{"log_level":"debug"}}
+func (s *Scribe) handleRemoteConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		NodeID string            `json:"node_id"`
+		Config map[string]string `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NodeID == "" || len(req.Config) == 0 {
+		http.Error(w, `{"error":"node_id and config required"}`, http.StatusBadRequest)
+		return
+	}
+	if err := s.node.SendRemoteCmd(req.NodeID, "config", req.Config); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadGateway)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

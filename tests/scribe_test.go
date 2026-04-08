@@ -93,7 +93,7 @@ func TestScribeNonScribeRejectsAllMutations(t *testing.T) {
 	cfg.Node.LogLevel = "error"
 	node.SetLogLevel(node.LevelError)
 
-	n, _ := node.New(cfg, nil)
+	n, _ := node.New(cfg, nil, "test")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = n.Run(ctx); close(done) }()
