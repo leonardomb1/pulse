@@ -86,6 +86,20 @@ go build -o pulse ./cmd/pulse/
 
 The installer requires `sudo` for placing the binary in `/usr/local/bin` and setting Linux capabilities (`CAP_NET_ADMIN` for TUN, `CAP_NET_BIND_SERVICE` for port 443).
 
+### DNS setup
+
+To resolve `.pulse` domains (e.g. `ssh user@db.pulse`), run the DNS setup script:
+
+```bash
+# Default port (5353):
+curl -fsSL https://raw.githubusercontent.com/leonardomb1/pulse/main/setup_dns.sh | sudo sh
+
+# Custom port:
+curl -fsSL https://raw.githubusercontent.com/leonardomb1/pulse/main/setup_dns.sh | sudo sh -s -- 5454
+```
+
+The script auto-detects systemd-resolved, NetworkManager+dnsmasq, resolvconf, or plain `/etc/resolv.conf` and configures accordingly. Undo instructions are printed after setup.
+
 ## Quickstart
 
 All configuration is via CLI flags and signed state from the scribe. No config files.
