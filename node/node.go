@@ -313,6 +313,20 @@ func (n *Node) Run(ctx context.Context) error {
 		Certificates:       []tls.Certificate{n.identity.TLSCert},
 		InsecureSkipVerify: true,
 	}
+
+	// Add persisted peer addresses as bootstrap targets so we reconnect
+	// after restart without needing the relay address on the command line.
+	bootstrapAddrs := make(map[string]bool)
+	for _, p := range n.cfg.Bootstrap.Peers {
+		bootstrapAddrs[p] = true
+	}
+	for _, entry := range n.table.Snapshot() {
+		if entry.Addr != "" && entry.NodeID != n.id && !bootstrapAddrs[entry.Addr] {
+			bootstrapAddrs[entry.Addr] = true
+			n.cfg.Bootstrap.Peers = append(n.cfg.Bootstrap.Peers, entry.Addr)
+		}
+	}
+
 	for _, peer := range n.cfg.Bootstrap.Peers {
 		p := peer
 		go connectBestTransport(ctx, p, bootstrapTLS, func(session Session) {

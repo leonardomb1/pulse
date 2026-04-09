@@ -19,6 +19,7 @@ package node
 import (
 	"encoding/binary"
 	"io"
+	"unsafe"
 )
 
 const (
@@ -220,8 +221,23 @@ func FECGroupSizeForLoss(lossRate float64) int {
 }
 
 // xorInto XORs src into dst (dst ^= src). dst must be >= len(src).
+// Uses 8-byte word XOR for cache-line-friendly throughput on the hot path.
 func xorInto(dst, src []byte) {
-	for i := 0; i < len(src) && i < len(dst); i++ {
+	n := len(src)
+	if n > len(dst) {
+		n = len(dst)
+	}
+
+	// XOR 8 bytes at a time.
+	i := 0
+	for ; i+8 <= n; i += 8 {
+		d := (*uint64)(unsafe.Pointer(&dst[i]))
+		s := (*uint64)(unsafe.Pointer(&src[i]))
+		*d ^= *s
+	}
+
+	// Remaining bytes.
+	for ; i < n; i++ {
 		dst[i] ^= src[i]
 	}
 }
