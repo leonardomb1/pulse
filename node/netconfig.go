@@ -81,7 +81,6 @@ type NodeConfig struct {
 	TunQueues    int      `json:"tun_queues,omitempty"` // multi-queue TUN readers
 	MeshIP       string   `json:"mesh_ip,omitempty"`
 	MeshCIDR     string   `json:"mesh_cidr,omitempty"`
-	IOURing      bool     `json:"iouring,omitempty"`
 	LogLevel     string   `json:"log_level,omitempty"`
 }
 

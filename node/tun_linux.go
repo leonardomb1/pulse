@@ -112,19 +112,6 @@ func NewTunDevice(n *Node, devName, meshCIDR string) (TunDevice, error) {
 func (t *tunManager) Run(ctx context.Context) {
 	go t.refreshMeshIPs(ctx)
 
-	// Select reader implementation: io_uring (batched syscalls) or standard fd.Read.
-	// io_uring is only used when explicitly enabled and available on this kernel.
-	useIOURing := t.node.cfg.Tun.IOURing && ioUringAvailable()
-	if t.node.cfg.Tun.IOURing && !useIOURing {
-		Warnf("tun: --iouring requested but io_uring not available on this kernel — using standard reader")
-	}
-
-	reader := t.tunReader
-	if useIOURing {
-		reader = t.tunReaderIOURing
-		Infof("tun: using io_uring for TUN reads")
-	}
-
 	// WireGuard-inspired pipeline:
 	//   N readers (one per TUN queue) → per-peer channel → per-peer writer → pipe
 	//
@@ -133,10 +120,10 @@ func (t *tunManager) Run(ctx context.Context) {
 	// Per-peer writers batch-drain their channel for fewer syscalls.
 	for i, fd := range t.fds {
 		if i < len(t.fds)-1 {
-			go reader(ctx, fd)
+			go t.tunReader(ctx, fd)
 		} else {
 			// Last reader runs on the calling goroutine (blocks).
-			reader(ctx, fd)
+			t.tunReader(ctx, fd)
 		}
 	}
 }
@@ -347,25 +334,12 @@ func (t *tunManager) peerWriter(nodeID string, pipe net.Conn, q chan tunPkt) {
 // Kept for compatibility with peers that haven't established a pipe yet.
 func (t *tunManager) HandleInbound(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
-
-	writeTUN := func(pkt []byte) error {
-		_, err := t.fds[0].Write(pkt)
-		return err
-	}
-	if t.node.cfg.Tun.IOURing {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		if iouringWrite := t.tunPipeWriterIOURing(ctx, t.fds[0]); iouringWrite != nil {
-			writeTUN = iouringWrite
-		}
-	}
-
 	for {
 		buf, pkt, err := tunFrameReadPooled(conn)
 		if err != nil {
 			return
 		}
-		werr := writeTUN(pkt)
+		_, werr := t.fds[0].Write(pkt)
 		putPktBuf(buf)
 		if werr != nil {
 			tunLog("write to tun: %v", werr)
@@ -395,20 +369,6 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 	}()
 
 	tunLog("pipe established with %s (fec=%v)", nodeID, t.node.cfg.Tun.FEC)
-
-	// Set up TUN write function — io_uring or standard.
-	writeTUN := func(pkt []byte) error {
-		_, err := t.fds[0].Write(pkt)
-		return err
-	}
-	if t.node.cfg.Tun.IOURing {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		if iouringWrite := t.tunPipeWriterIOURing(ctx, t.fds[0]); iouringWrite != nil {
-			writeTUN = iouringWrite
-			tunLog("pipe %s: using io_uring for TUN writes", nodeID)
-		}
-	}
 
 	useFEC := t.node.cfg.Tun.FEC
 	var dec *fecDecoder
@@ -442,7 +402,7 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 				// Already handled above.
 			} else if recovered != nil {
 				// A previous missing packet was recovered — write it too.
-				_ = writeTUN(recovered)
+				_, _ = t.fds[0].Write(recovered)
 			}
 		} else {
 			var err error
@@ -472,7 +432,7 @@ func (t *tunManager) RunPipe(nodeID string, conn net.Conn) {
 				}
 			}
 		}
-		if err := writeTUN(pkt); err != nil {
+		if _, err := t.fds[0].Write(pkt); err != nil {
 			if buf != nil {
 				putPktBuf(buf)
 			}

@@ -75,13 +75,11 @@ type ScribeConfig struct {
 }
 
 type TunConfig struct {
-	Enabled     bool
-	Name        string
-	CIDR        string
-	FEC         bool
-	Queues      int  // multi-queue TUN readers (default 1, set higher for >1Gbps)
-	IOURing     bool // use io_uring for TUN I/O (Linux ≥5.1, auto-fallback)
-	IOURingBufs int  // io_uring buffers per queue (default 128, higher = more in-flight I/O)
+	Enabled bool
+	Name    string
+	CIDR    string
+	FEC     bool
+	Queues  int // multi-queue TUN readers (default 1, set higher for >1Gbps)
 }
 
 type PersistConfig struct {
