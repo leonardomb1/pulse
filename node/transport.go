@@ -177,7 +177,7 @@ func dialPeer(ctx context.Context, peerAddr string, tlsCfg *tls.Config, endpoint
 	cfg.KeepAliveInterval = 15 * time.Second
 	cfg.StreamCloseTimeout = 10 * time.Second
 	// Use a larger window for high-bandwidth streams (RDP, file transfer).
-	cfg.MaxStreamWindowSize = 256 * 1024
+	cfg.MaxStreamWindowSize = 4 * 1024 * 1024 // 4MB — match QUIC window for high-BDP links
 
 	session, err := yamux.Client(wsc, cfg)
 	if err != nil {
@@ -200,7 +200,7 @@ func serveWebSocket(ctx context.Context, w http.ResponseWriter, r *http.Request,
 	cfg := yamux.DefaultConfig()
 	cfg.EnableKeepAlive = true
 	cfg.KeepAliveInterval = 15 * time.Second
-	cfg.MaxStreamWindowSize = 256 * 1024
+	cfg.MaxStreamWindowSize = 4 * 1024 * 1024 // 4MB — match QUIC window for high-BDP links
 
 	session, err := yamux.Server(wsc, cfg)
 	if err != nil {

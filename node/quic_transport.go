@@ -19,19 +19,42 @@ package node
 //   - Dialer tries QUIC first (100ms timeout). Falls back to WebSocket if QUIC
 //     is blocked (some corporate firewalls drop UDP 443).
 //   - Once connected, the session type is transparent to the rest of the node.
+//
+// UDP socket auto-tuning:
+//   - On startup, reads net.core.rmem_max / wmem_max from /proc/sys
+//   - Sets socket buffers to the kernel maximum (no sysctl required)
+//   - Enables GSO/GRO/ECN automatically via quic-go's OOBCapablePacketConn
 
 import (
 	"context"
 	"crypto/tls"
 	"net"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/quic-go/quic-go"
 )
 
+// quicConfig returns the shared QUIC configuration with tuned windows.
+func quicConfig() *quic.Config {
+	return &quic.Config{
+		MaxIncomingStreams:             4096,
+		KeepAlivePeriod:                15 * time.Second,
+		MaxIdleTimeout:                 60 * time.Second,
+		Allow0RTT:                      true,
+		InitialStreamReceiveWindow:     4 * 1024 * 1024,  // 4MB — fast ramp on high-BDP links
+		MaxStreamReceiveWindow:         16 * 1024 * 1024, // 16MB — sustain throughput
+		InitialConnectionReceiveWindow: 8 * 1024 * 1024,  // 8MB — aggregate across streams
+		MaxConnectionReceiveWindow:     32 * 1024 * 1024, // 32MB
+	}
+}
+
 // quicSession wraps a *quic.Conn to implement the Session interface.
 type quicSession struct {
-	conn *quic.Conn
+	conn      *quic.Conn
+	transport *quic.Transport // non-nil for dialed sessions; closed when session closes
 }
 
 func (q *quicSession) Open() (net.Conn, error) {
@@ -50,7 +73,13 @@ func (q *quicSession) Accept() (net.Conn, error) {
 	return &quicStream{stream: stream, conn: q.conn}, nil
 }
 
-func (q *quicSession) Close() error { return q.conn.CloseWithError(0, "close") }
+func (q *quicSession) Close() error {
+	err := q.conn.CloseWithError(0, "close")
+	if q.transport != nil {
+		_ = q.transport.Close()
+	}
+	return err
+}
 func (q *quicSession) IsClosed() bool {
 	select {
 	case <-q.conn.Context().Done():
@@ -76,19 +105,77 @@ func (s *quicStream) SetWriteDeadline(t time.Time) error { return s.stream.SetWr
 func (s *quicStream) LocalAddr() net.Addr                { return s.conn.LocalAddr() }
 func (s *quicStream) RemoteAddr() net.Addr               { return s.conn.RemoteAddr() }
 
-// listenQUIC starts a QUIC listener on the given address.
+// newTunedUDPConn creates a UDP socket with buffers tuned to the kernel maximum.
+// Reads rmem_max/wmem_max from /proc/sys and sets the socket accordingly.
+// Falls back to quic-go's desired 7MB or the OS default if /proc is unavailable.
+func newTunedUDPConn(addr string) (*net.UDPConn, error) {
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	recvMax := readSysctl("net.core.rmem_max")
+	sendMax := readSysctl("net.core.wmem_max")
+
+	// Use the kernel max, capped at 26MB (no point going higher).
+	const cap = 26 * 1024 * 1024
+	if recvMax > cap {
+		recvMax = cap
+	}
+	if sendMax > cap {
+		sendMax = cap
+	}
+
+	if recvMax > 0 {
+		_ = conn.SetReadBuffer(recvMax)
+	}
+	if sendMax > 0 {
+		_ = conn.SetWriteBuffer(sendMax)
+	}
+
+	Debugf("quic: UDP socket on %s (recv_buf=%dKB, send_buf=%dKB)",
+		addr, recvMax/1024, sendMax/1024)
+
+	return conn, nil
+}
+
+// readSysctl reads an integer sysctl value from /proc/sys.
+// Returns 0 if unavailable.
+func readSysctl(name string) int {
+	path := "/proc/sys/" + strings.ReplaceAll(name, ".", "/")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// listenQUIC starts a QUIC listener on the given address using a Transport
+// with an auto-tuned UDP socket.
 func listenQUIC(addr string, tlsCfg *tls.Config, onSession func(Session, string)) error {
-	// QUIC requires ALPN to be set.
 	qtls := tlsCfg.Clone()
 	qtls.NextProtos = []string{"github.com/leonardomb1/pulse/1"}
 
-	ln, err := quic.ListenAddr(addr, qtls, &quic.Config{
-		MaxIncomingStreams: 4096,
-		KeepAlivePeriod:    15 * time.Second,
-		MaxIdleTimeout:     60 * time.Second,
-		EnableDatagrams:    false,
-	})
+	conn, err := newTunedUDPConn(addr)
 	if err != nil {
+		return err
+	}
+
+	tr := &quic.Transport{
+		Conn: conn,
+	}
+
+	ln, err := tr.Listen(qtls, quicConfig())
+	if err != nil {
+		_ = conn.Close()
 		return err
 	}
 	Infof("QUIC listener on %s", addr)
@@ -116,15 +203,27 @@ func dialQUIC(ctx context.Context, peerAddr string, tlsCfg *tls.Config) (Session
 	qctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	conn, err := quic.DialAddr(qctx, peerAddr, qtls, &quic.Config{
-		MaxIncomingStreams: 4096,
-		KeepAlivePeriod:    15 * time.Second,
-		MaxIdleTimeout:     60 * time.Second,
-	})
+	udpAddr, err := net.ResolveUDPAddr("udp", peerAddr)
 	if err != nil {
 		return nil, err
 	}
-	return &quicSession{conn: conn}, nil
+
+	// Dial with an ephemeral local socket, also auto-tuned.
+	conn, err := newTunedUDPConn(":0")
+	if err != nil {
+		return nil, err
+	}
+
+	tr := &quic.Transport{
+		Conn: conn,
+	}
+
+	qconn, err := tr.Dial(qctx, udpAddr, qtls, quicConfig())
+	if err != nil {
+		_ = tr.Close()
+		return nil, err
+	}
+	return &quicSession{conn: qconn, transport: tr}, nil
 }
 
 // dialBestTransport tries QUIC first, falls back to WebSocket+yamux.
