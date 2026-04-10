@@ -109,10 +109,20 @@ setup_resolv_conf_direct() {
         return
     fi
 
-    # Prepend our nameserver (only works for non-managed resolv.conf).
+    # Back up the original.
     cp "$RESOLV" "${RESOLV}.pulse-backup"
+
+    # Prepend our nameserver.
     printf "nameserver %s # pulse-dns\n" "127.0.0.1" | cat - "$RESOLV" > "${RESOLV}.tmp"
     mv "${RESOLV}.tmp" "$RESOLV"
+
+    # Append pulse to existing search line, or add one.
+    if grep -q '^search ' "$RESOLV"; then
+        sed -i 's/^search .*/& pulse/' "$RESOLV"
+    else
+        echo "search pulse" >> "$RESOLV"
+    fi
+
     echo "configured /etc/resolv.conf directly"
     echo "  backed up to ${RESOLV}.pulse-backup"
     echo "  note: this sends ALL queries to 127.0.0.1 first — only .pulse will resolve there"
